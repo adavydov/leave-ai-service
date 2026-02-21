@@ -1,8 +1,25 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Literal
 
+
+
+
+IssueSeverity = Literal["error", "warn", "info"]
+IssueDomain = Literal["extraction", "compliance", "system", "upstream"]
+IssueCategory = Literal[
+    "document",
+    "dates",
+    "counts",
+    "signature",
+    "law_hints",
+    "quality",
+    "timeouts",
+    "network",
+    "validation",
+    "unknown",
+]
 
 LeaveType = Literal[
     "annual_paid",   # ежегодный оплачиваемый
@@ -34,9 +51,47 @@ class LeaveInfo(BaseModel):
     days_count: Optional[int] = Field(None, description="Количество календарных дней")
     comment: Optional[str] = Field(None, description="Примечание/основание/период и т.п.")
 
+    @field_validator("leave_type", mode="before")
+    @classmethod
+    def _normalize_leave_type(cls, value):
+        if value is None:
+            return "unknown"
+        v = str(value).strip().lower()
+        aliases = {
+            "annual_paid": "annual_paid",
+            "ежегодный оплачиваемый отпуск": "annual_paid",
+            "ежегодный оплачиваемый": "annual_paid",
+            "оплачиваемый отпуск": "annual_paid",
+            "unpaid": "unpaid",
+            "без сохранения": "unpaid",
+            "без сохранения заработной платы": "unpaid",
+            "study": "study",
+            "учебный": "study",
+            "maternity": "maternity",
+            "беременности и родам": "maternity",
+            "childcare": "childcare",
+            "по уходу за ребенком": "childcare",
+            "по уходу за ребёнком": "childcare",
+            "other": "other",
+            "unknown": "unknown",
+        }
+        if v in aliases:
+            return aliases[v]
+        if "оплач" in v and "отпуск" in v:
+            return "annual_paid"
+        if "без сохран" in v:
+            return "unpaid"
+        if "учеб" in v:
+            return "study"
+        if "беремен" in v or "родам" in v:
+            return "maternity"
+        if "уход" in v and ("ребен" in v or "ребён" in v):
+            return "childcare"
+        return "unknown"
+
 
 class Quality(BaseModel):
-    overall_confidence: float = Field(0.0, ge=0, le=1, description="Уверенность 0..1")
+    overall_confidence: Optional[float] = Field(None, ge=0, le=1, description="Уверенность 0..1")
     missing_fields: List[str] = Field(default_factory=list, description="Каких важных полей не хватает")
     notes: List[str] = Field(default_factory=list, description="Короткие замечания")
 
@@ -63,6 +118,43 @@ class ValidationIssue(BaseModel):
     message: str
 
 
+class ComplianceIssue(BaseModel):
+    level: Literal["error", "warn", "info"] = "info"
+    code: str
+    field: Optional[str] = None
+    message: str
+    details: Optional[dict] = None
+
+
+class Issue(BaseModel):
+    severity: IssueSeverity = "info"
+    domain: IssueDomain = "system"
+    category: IssueCategory = "unknown"
+    code: str
+    field: Optional[str] = None
+    message: str
+    hint: Optional[str] = None
+    details: Optional[dict] = None
+    source: Optional[str] = None
+
+
+class Decision(BaseModel):
+    status: Literal["ok", "warn", "error"] = "ok"
+    needs_rewrite: bool = False
+    summary: str = "Замечаний не обнаружено."
+
+
+class Trace(BaseModel):
+    request_id: str
+    upstream_request_ids: dict[str, str] = Field(default_factory=dict)
+    timings_ms: dict[str, int] = Field(default_factory=dict)
+
+
 class ApiResponse(BaseModel):
     extract: LeaveRequestExtract
     validation: List[ValidationIssue]
+    compliance: List[ComplianceIssue] = Field(default_factory=list)
+    needs_rewrite: bool = False
+    issues: List[Issue] = Field(default_factory=list)
+    decision: Decision = Field(default_factory=Decision)
+    trace: Optional[Trace] = None
