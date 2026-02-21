@@ -202,12 +202,15 @@ function bindEvents() {
     if (e.key === 'Escape') byId('fileInput').value = '';
   });
 
-  byId('copyRequestBtn').addEventListener('click', async () => {
-    const rid = state.result?.trace?.request_id || state.requestId || state.error?.trace?.request_id;
-    if (!rid) return;
-    await navigator.clipboard.writeText(rid);
-    showToast('Скопировано');
-  });
+  const copyRequestBtn = byId('copyRequestBtn');
+  if (copyRequestBtn) {
+    copyRequestBtn.addEventListener('click', async () => {
+      const rid = state.result?.trace?.request_id || state.requestId || state.error?.trace?.request_id;
+      if (!rid) return;
+      await navigator.clipboard.writeText(rid);
+      showToast('Скопировано');
+    });
+  }
 
   byId('copyJsonBtn').addEventListener('click', () => state.result && copyJson({ ...state.result, extract: state.editableExtract || state.result.extract }));
   byId('downloadJsonBtn').addEventListener('click', () => state.result && downloadJson({ ...state.result, extract: state.editableExtract || state.result.extract }));

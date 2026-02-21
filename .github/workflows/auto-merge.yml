@@ -10,9 +10,9 @@ jobs:
       github.event.pull_request.draft == false &&
       (
         github.event.pull_request.user.login == 'codex' ||
-        github.event.pull_request.user.login == 'openai-codex' ||
-        startsWith(github.event.pull_request.head.ref, 'codex/')
-      )
+        github.event.pull_request.user.login == 'openai-codex'
+      ) &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
