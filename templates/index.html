@@ -56,6 +56,10 @@
     </table>
   </section>
 
-  <script src="/static/app.js"></script>
+  <script>
+    // legacy/cached-script compatibility
+    window.outEl = document.getElementById('out') || { textContent: '' };
+  </script>
+  <script src="/static/app.js?v=20260221-2"></script>
 </body>
 </html>
