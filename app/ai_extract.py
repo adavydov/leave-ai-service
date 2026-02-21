@@ -4,9 +4,7 @@ import base64
 import json
 import logging
 import os
-import queue
 import re
-import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import anthropic
@@ -63,6 +61,13 @@ def _safe_anthropic_error_message(err: Exception) -> str:
     return "Не удалось обработать документ во внешнем AI-сервисе."
 
 
+
+
+def _resolve_structured_model(configured_structured_model: Optional[str]) -> str:
+    configured = (configured_structured_model or "").strip()
+    return configured or "claude-sonnet-4-6"
+
+
 def _resolve_vision_fallback_model(primary_model: str, configured_fallback_model: Optional[str]) -> Optional[str]:
     configured = (configured_fallback_model or "").strip()
     primary = (primary_model or "").strip()
@@ -98,7 +103,7 @@ def _should_try_structured_parse_fallback(err: Exception, primary_model: str, fa
     fallback = _resolve_structured_fallback_model(primary_model, fallback_model)
     if not fallback:
         return False
-    if isinstance(err, TimeoutError):
+    if isinstance(err, (anthropic.APITimeoutError, TimeoutError)):
         return True
     if isinstance(err, anthropic.APIError):
         status_code = int(getattr(err, "status_code", 0) or 0)
@@ -356,29 +361,6 @@ def _trim_draft_text(draft_text: str, max_chars: int, debug_steps: List[str], on
     return trimmed
 
 
-def _run_with_timeout(fn: Callable[[], Any], timeout_s: int, label: str):
-    timeout_s = max(1, int(timeout_s))
-    result_q: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
-
-    def _runner() -> None:
-        try:
-            result_q.put((True, fn()))
-        except Exception as err:  # noqa: BLE001
-            result_q.put((False, err))
-
-    t = threading.Thread(target=_runner, daemon=True, name=f"timeout-{label}")
-    t.start()
-
-    try:
-        ok, payload = result_q.get(timeout=timeout_s)
-    except queue.Empty as e:
-        raise TimeoutError(f"{label} timed out after {timeout_s}s") from e
-
-    if ok:
-        return payload
-    raise payload
-
-
 def _create_anthropic_client(api_key: str, max_retries: int, http_timeout_s: int) -> Anthropic:
     try:
         return Anthropic(api_key=api_key, max_retries=max_retries, timeout=max(5, int(http_timeout_s)))
@@ -404,7 +386,7 @@ def _request_id_of(obj: Any) -> Optional[str]:
     return None
 
 
-def _raise_timeout(step: str, err: TimeoutError, debug_steps: List[str]):
+def _raise_timeout(step: str, err: Exception, debug_steps: List[str]):
     raise UpstreamAIError(
         step=step,
         status_code=504,
@@ -534,7 +516,7 @@ def extract_leave_request_with_debug(
         )
 
     vision_model = model or os.getenv("ANTHROPIC_VISION_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-    structured_model = os.getenv("ANTHROPIC_STRUCTURED_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    structured_model = _resolve_structured_model(os.getenv("ANTHROPIC_STRUCTURED_MODEL"))
     configured_vision_fallback_model = os.getenv("ANTHROPIC_VISION_FALLBACK_MODEL")
     vision_fallback_model = _resolve_vision_fallback_model(vision_model, configured_vision_fallback_model)
     configured_structured_fallback_model = os.getenv("ANTHROPIC_STRUCTURED_FALLBACK_MODEL")
@@ -593,13 +575,13 @@ def extract_leave_request_with_debug(
                 messages=[{"role": "user", "content": image_blocks + [{"type": "text", "text": _draft_prompt_ru()}]}],
             )
 
-        draft_msg = _run_with_timeout(lambda: _vision_call(vision_model), vision_timeout_s, "vision")
+        draft_msg = _vision_call(vision_model)
         draft_text = _extract_text_from_msg(draft_msg)
         _add_debug(debug_steps, f"Шаг vision: ответ получен, chars={len(draft_text)}", on_debug)
         rid = _request_id_of(draft_msg)
         if rid:
             _add_debug(debug_steps, f"Шаг vision: request_id={rid}", on_debug)
-    except TimeoutError as e:
+    except anthropic.APITimeoutError as e:
         _add_debug(debug_steps, "Шаг vision: timeout", on_debug)
         _raise_timeout("vision", e, debug_steps)
     except anthropic.APIError as e:
@@ -616,13 +598,13 @@ def extract_leave_request_with_debug(
                 on_debug,
             )
             try:
-                draft_msg = _run_with_timeout(lambda: _vision_call(str(vision_fallback_model)), vision_timeout_s, "vision.fallback")
+                draft_msg = _vision_call(str(vision_fallback_model))
                 draft_text = _extract_text_from_msg(draft_msg)
                 _add_debug(debug_steps, f"Шаг vision.fallback: ответ получен, chars={len(draft_text)}", on_debug)
                 rid = _request_id_of(draft_msg)
                 if rid:
                     _add_debug(debug_steps, f"Шаг vision.fallback: request_id={rid}", on_debug)
-            except TimeoutError as fallback_timeout:
+            except anthropic.APITimeoutError as fallback_timeout:
                 _add_debug(debug_steps, "Шаг vision.fallback: timeout", on_debug)
                 _raise_timeout("vision", fallback_timeout, debug_steps)
             except anthropic.APIError as fallback_error:
@@ -658,7 +640,7 @@ def extract_leave_request_with_debug(
                 output_format=LeaveRequestExtract,
             ).parsed_output
 
-        parsed = _run_with_timeout(lambda: _structured_parse_call(structured_model), structured_parse_timeout_s, "structured.parse")
+        parsed = _structured_parse_call(structured_model)
         _add_debug(debug_steps, "Шаг structured.parse: успешно", on_debug)
     except Exception as e:
         _add_debug(debug_steps, f"Шаг structured.parse: ошибка {type(e).__name__}: {_short_error(e)}", on_debug)
@@ -675,11 +657,7 @@ def extract_leave_request_with_debug(
                 on_debug,
             )
             try:
-                parsed = _run_with_timeout(
-                    lambda: _structured_parse_call(parse_fallback_model),
-                    structured_parse_timeout_s,
-                    "structured.parse.fallback",
-                )
+                parsed = _structured_parse_call(parse_fallback_model)
                 _add_debug(debug_steps, "Шаг structured.parse.fallback: успешно", on_debug)
             except Exception as parse_fallback_err:
                 _add_debug(
@@ -715,11 +693,7 @@ def extract_leave_request_with_debug(
                         f"(configured={configured_structured_fallback_model or '-'}, primary={structured_model})",
                         on_debug,
                     )
-                raw_msg = _run_with_timeout(
-                    lambda: _structured_fallback_call(create_model),
-                    structured_fallback_timeout_s,
-                    "structured.fallback.create",
-                )
+                raw_msg = _structured_fallback_call(create_model)
                 raw_text = _extract_text_from_msg(raw_msg)
                 _add_debug(debug_steps, f"Шаг structured.fallback.create: ответ chars={len(raw_text)}", on_debug)
                 rid = _request_id_of(raw_msg)
@@ -742,8 +716,8 @@ def extract_leave_request_with_debug(
                         message="Ответ AI получен, но не соответствует схеме данных. Проверьте тип отпуска/даты в документе.",
                         debug_steps=debug_steps,
                     ) from fallback_err
-                source_err = fallback_err if isinstance(fallback_err, (anthropic.APIError, TimeoutError)) else (e or fallback_err)
-                if isinstance(source_err, TimeoutError):
+                source_err = fallback_err if isinstance(fallback_err, (anthropic.APIError, anthropic.APITimeoutError)) else (e or fallback_err)
+                if isinstance(source_err, anthropic.APITimeoutError):
                     _raise_timeout("structured", source_err, debug_steps)
                 if isinstance(source_err, anthropic.APIError):
                     _raise_upstream("structured", source_err, debug_steps)
