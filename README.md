@@ -28,3 +28,19 @@ uvicorn app.main:app --reload
 - `MOCK_MODE=1` — выключает внешние вызовы и возвращает мок-ответ
 - `MAX_UPLOAD_MB` — лимит размера PDF (по умолчанию 15)
 - `PDF_MAX_PAGES` — число страниц PDF для обработки (по умолчанию 1)
+
+
+## Логи в проде (важно для диагностики)
+
+Чтобы traceback и пошаговые логи не терялись в проде, запускайте через Gunicorn с конфигом:
+
+```bash
+gunicorn app.main:app -c gunicorn_conf.py
+```
+
+В `gunicorn_conf.py` включены:
+- `accesslog = "-"`
+- `errorlog = "-"`
+- `capture_output = True`
+
+Это гарантирует, что `logger.exception(...)` и stdout/stderr попадут в логи платформы (Render logs).

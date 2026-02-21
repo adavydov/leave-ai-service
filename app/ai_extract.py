@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import anthropic
-from anthropic import Anthropic
 import fitz  # PyMuPDF
+from anthropic import Anthropic
 
 from .schemas import LeaveRequestExtract
 
@@ -19,6 +20,16 @@ class UpstreamAIError(RuntimeError):
         self.step = step
         self.status_code = status_code
         self.debug_steps = debug_steps or []
+
+
+logger = logging.getLogger(__name__)
+
+
+def _add_debug(debug_steps: List[str], message: str, on_debug: Optional[Callable[[str], None]] = None) -> None:
+    debug_steps.append(message)
+    logger.info("[extract] %s", message)
+    if on_debug:
+        on_debug(message)
 
 
 def _safe_anthropic_error_message(err: Exception) -> str:
@@ -127,7 +138,12 @@ def _parse_prompt_ru_json_only(draft_text: str) -> str:
     )
 
 
-def _render_pdf_to_image_blocks(pdf_bytes: bytes, debug_steps: List[str]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def _render_pdf_to_image_blocks(
+    pdf_bytes: bytes,
+    debug_steps: List[str],
+    *,
+    on_debug: Optional[Callable[[str], None]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     max_pages = _env_int_min("PDF_MAX_PAGES", 1, 1)
     target_long_edge = _env_int_min("PDF_TARGET_LONG_EDGE", 1568, 512)
     max_b64_bytes = _env_int("PDF_MAX_B64_BYTES", 30 * 1024 * 1024)
@@ -141,7 +157,7 @@ def _render_pdf_to_image_blocks(pdf_bytes: bytes, debug_steps: List[str]) -> Tup
     blocks: List[Dict[str, Any]] = []
     page_stats: List[Dict[str, Any]] = []
 
-    debug_steps.append(f"PDF открыт: pages_total={total_pages}, pages_to_send={pages_to_send}, color_mode={color_mode}")
+    _add_debug(debug_steps, f"PDF открыт: pages_total={total_pages}, pages_to_send={pages_to_send}, color_mode={color_mode}", on_debug)
 
     try:
         for i in range(pages_to_send):
@@ -171,9 +187,7 @@ def _render_pdf_to_image_blocks(pdf_bytes: bytes, debug_steps: List[str]) -> Tup
 
         approx_b64_bytes = sum(p["b64_chars"] for p in page_stats)
         if approx_b64_bytes > max_b64_bytes:
-            raise RuntimeError(
-                f"Rendered images too large for request: approx_b64_bytes={approx_b64_bytes} > {max_b64_bytes}."
-            )
+            raise RuntimeError(f"Rendered images too large for request: approx_b64_bytes={approx_b64_bytes} > {max_b64_bytes}.")
 
         info = {
             "total_pages": total_pages,
@@ -183,8 +197,10 @@ def _render_pdf_to_image_blocks(pdf_bytes: bytes, debug_steps: List[str]) -> Tup
             "approx_b64_bytes": approx_b64_bytes,
             "page_stats": page_stats,
         }
-        debug_steps.append(
-            f"PDF->PNG ок: pages_sent={pages_to_send}, approx_b64_bytes={approx_b64_bytes}, page0={page_stats[0] if page_stats else None}"
+        _add_debug(
+            debug_steps,
+            f"PDF->PNG ок: pages_sent={pages_to_send}, approx_b64_bytes={approx_b64_bytes}, page0={page_stats[0] if page_stats else None}",
+            on_debug,
         )
         return blocks, info
     finally:
@@ -206,12 +222,13 @@ def extract_leave_request_with_debug(
     filename: str = "upload.pdf",
     *,
     model: Optional[str] = None,
+    on_debug: Optional[Callable[[str], None]] = None,
 ) -> Tuple[LeaveRequestExtract, List[str]]:
     debug_steps: List[str] = []
-    debug_steps.append(f"Файл загружен: name={filename}, bytes={len(pdf_bytes)}")
+    _add_debug(debug_steps, f"Файл загружен: name={filename}, bytes={len(pdf_bytes)}", on_debug)
 
     if os.getenv("MOCK_MODE", "0").strip() == "1":
-        debug_steps.append("MOCK_MODE=1, внешний AI не вызывается")
+        _add_debug(debug_steps, "MOCK_MODE=1, внешний AI не вызывается", on_debug)
         parsed = LeaveRequestExtract.model_validate(
             {
                 "schema_version": "1.0",
@@ -236,8 +253,13 @@ def extract_leave_request_with_debug(
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        debug_steps.append("Ошибка: ANTHROPIC_API_KEY отсутствует")
-        raise RuntimeError("ANTHROPIC_API_KEY не задан (Render env vars / .env).")
+        _add_debug(debug_steps, "Ошибка: ANTHROPIC_API_KEY отсутствует", on_debug)
+        raise UpstreamAIError(
+            step="config",
+            status_code=500,
+            message="ANTHROPIC_API_KEY не задан (Render env vars / .env).",
+            debug_steps=debug_steps,
+        )
 
     vision_model = model or os.getenv("ANTHROPIC_VISION_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     structured_model = os.getenv("ANTHROPIC_STRUCTURED_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
@@ -247,13 +269,21 @@ def extract_leave_request_with_debug(
 
     client = Anthropic(api_key=api_key, max_retries=max_retries)
 
-    debug_steps.append(f"Конфиг AI: vision_model={vision_model}, structured_model={structured_model}, retries={max_retries}")
+    _add_debug(debug_steps, f"Конфиг AI: vision_model={vision_model}, structured_model={structured_model}, retries={max_retries}", on_debug)
 
-    image_blocks, render_info = _render_pdf_to_image_blocks(pdf_bytes, debug_steps)
-
-    # 1) Vision -> draft text
     try:
-        debug_steps.append("Шаг vision: отправка PNG в Anthropic")
+        image_blocks, render_info = _render_pdf_to_image_blocks(pdf_bytes, debug_steps, on_debug=on_debug)
+    except Exception as e:
+        _add_debug(debug_steps, f"Шаг PDF->PNG: ошибка: {type(e).__name__}", on_debug)
+        raise UpstreamAIError(
+            step="render",
+            status_code=422,
+            message="Не удалось обработать PDF перед отправкой в AI.",
+            debug_steps=debug_steps,
+        ) from e
+
+    try:
+        _add_debug(debug_steps, "Шаг vision: отправка PNG в Anthropic", on_debug)
         draft_msg = client.messages.create(
             model=vision_model,
             max_tokens=draft_max_tokens,
@@ -262,18 +292,17 @@ def extract_leave_request_with_debug(
             messages=[{"role": "user", "content": image_blocks + [{"type": "text", "text": _draft_prompt_ru()}]}],
         )
         draft_text = _extract_text_from_msg(draft_msg)
-        debug_steps.append(f"Шаг vision: ответ получен, chars={len(draft_text)}")
+        _add_debug(debug_steps, f"Шаг vision: ответ получен, chars={len(draft_text)}", on_debug)
     except anthropic.APIError as e:
-        debug_steps.append(f"Шаг vision: ошибка API: {type(e).__name__}")
+        _add_debug(debug_steps, f"Шаг vision: ошибка API: {type(e).__name__}", on_debug)
         _raise_upstream("vision", e, debug_steps)
 
     if not draft_text:
         draft_text = "TRANSCRIPTION:\n(null)\nCANDIDATE_FIELDS:\n(null)"
-        debug_steps.append("Шаг vision: пустой ответ, подставлен дефолтный draft")
+        _add_debug(debug_steps, "Шаг vision: пустой ответ, подставлен дефолтный draft", on_debug)
 
-    # 2) Structured extraction
     try:
-        debug_steps.append("Шаг structured.parse: отправка draft на структуризацию")
+        _add_debug(debug_steps, "Шаг structured.parse: отправка draft на структуризацию", on_debug)
         parsed = client.messages.parse(
             model=structured_model,
             max_tokens=out_max_tokens,
@@ -282,9 +311,9 @@ def extract_leave_request_with_debug(
             messages=[{"role": "user", "content": _parse_prompt_ru_json_only(draft_text)}],
             output_format=LeaveRequestExtract,
         ).parsed_output
-        debug_steps.append("Шаг structured.parse: успешно")
+        _add_debug(debug_steps, "Шаг structured.parse: успешно", on_debug)
     except anthropic.APIError as e:
-        debug_steps.append("Шаг structured.parse: ошибка, пробуем fallback через messages.create")
+        _add_debug(debug_steps, "Шаг structured.parse: ошибка, пробуем fallback через messages.create", on_debug)
         try:
             raw_msg = client.messages.create(
                 model=structured_model,
@@ -294,15 +323,23 @@ def extract_leave_request_with_debug(
                 messages=[{"role": "user", "content": _parse_prompt_ru_json_only(draft_text)}],
             )
             raw_text = _extract_text_from_msg(raw_msg)
-            debug_steps.append(f"Шаг structured.fallback.create: ответ chars={len(raw_text)}")
+            _add_debug(debug_steps, f"Шаг structured.fallback.create: ответ chars={len(raw_text)}", on_debug)
             raw_json = _extract_first_json_object(raw_text)
             parsed = LeaveRequestExtract.model_validate(raw_json)
             parsed.quality.notes.append("structured_fallback=create+json")
-            debug_steps.append("Шаг structured.fallback.validate: JSON валиден")
+            _add_debug(debug_steps, "Шаг structured.fallback.validate: JSON валиден", on_debug)
         except Exception as fallback_err:
-            debug_steps.append(f"Шаг structured.fallback: ошибка: {type(fallback_err).__name__}")
+            _add_debug(debug_steps, f"Шаг structured.fallback: ошибка: {type(fallback_err).__name__}", on_debug)
             source_err = fallback_err if isinstance(fallback_err, anthropic.APIError) else e
             _raise_upstream("structured", source_err, debug_steps)
+    except Exception as e:
+        _add_debug(debug_steps, f"Шаг structured.parse: не-API ошибка: {type(e).__name__}", on_debug)
+        raise UpstreamAIError(
+            step="structured",
+            status_code=500,
+            message="Ошибка структуризации ответа AI-сервиса.",
+            debug_steps=debug_steps,
+        ) from e
 
     try:
         parsed.quality.notes.append(
@@ -313,7 +350,7 @@ def extract_leave_request_with_debug(
     except Exception:
         pass
 
-    debug_steps.append("Готово: extraction успешно завершён")
+    _add_debug(debug_steps, "Готово: extraction успешно завершён", on_debug)
     return parsed, debug_steps
 
 
