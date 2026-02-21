@@ -133,6 +133,8 @@ def _draft_prompt_ru() -> str:
 def _parse_prompt_ru_json_only(draft_text: str) -> str:
     return (
         "На основе распознанного текста верни ТОЛЬКО валидный JSON-объект без markdown и пояснений.\n"
+        "Критично: поле leave.leave_type верни только одним из canonical значений: "
+        "annual_paid | unpaid | study | maternity | childcare | other | unknown.\n"
         "Если поле не подтверждается текстом — null.\n"
         "Структура: schema_version, employer_name, employee, manager, request_date, leave, "
         "signature_present, signature_confidence, raw_text, quality.\n\n"
@@ -195,6 +197,44 @@ def _normalize_fallback_payload(raw_json: Dict[str, Any], debug_steps: List[str]
         if original != normalized:
             leave["leave_type"] = normalized
             _add_debug(debug_steps, f"Шаг structured.fallback.normalize: leave_type '{original}' -> '{normalized}'", on_debug)
+
+    signature_confidence = payload.get("signature_confidence")
+    if signature_confidence is not None:
+        normalized_sc = signature_confidence
+        if isinstance(signature_confidence, str):
+            sv = signature_confidence.strip().lower()
+            if sv in {"high", "высокая", "высокий"}:
+                normalized_sc = 0.9
+            elif sv in {"medium", "средняя", "средний"}:
+                normalized_sc = 0.6
+            elif sv in {"low", "низкая", "низкий"}:
+                normalized_sc = 0.3
+            else:
+                try:
+                    normalized_sc = float(sv.replace(",", "."))
+                except ValueError:
+                    normalized_sc = None
+        elif isinstance(signature_confidence, (int, float)):
+            normalized_sc = float(signature_confidence)
+        else:
+            normalized_sc = None
+
+        if normalized_sc is None:
+            _add_debug(
+                debug_steps,
+                f"Шаг structured.fallback.normalize: signature_confidence '{signature_confidence}' -> null",
+                on_debug,
+            )
+            payload["signature_confidence"] = None
+        else:
+            clipped_sc = max(0.0, min(1.0, float(normalized_sc)))
+            if clipped_sc != signature_confidence:
+                _add_debug(
+                    debug_steps,
+                    f"Шаг structured.fallback.normalize: signature_confidence '{signature_confidence}' -> {clipped_sc}",
+                    on_debug,
+                )
+            payload["signature_confidence"] = clipped_sc
     return payload
 
 
@@ -382,12 +422,22 @@ def extract_leave_request_with_debug(
     structured_fallback_timeout_s = _env_int_min("ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S", 90, 15)
     structured_draft_max_chars = _env_int_min("ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS", 12000, 2000)
 
-    client = _create_anthropic_client(api_key=api_key, max_retries=max_retries, http_timeout_s=anthropic_http_timeout_s)
+    min_required_sdk_timeout = max(vision_timeout_s, structured_parse_timeout_s, structured_fallback_timeout_s) + 5
+    effective_http_timeout_s = max(anthropic_http_timeout_s, min_required_sdk_timeout)
+    if effective_http_timeout_s != anthropic_http_timeout_s:
+        _add_debug(
+            debug_steps,
+            f"Конфиг AI: sdk_http_timeout_s повышен с {anthropic_http_timeout_s} до {effective_http_timeout_s} "
+            f"(>= max step timeout + 5s)",
+            on_debug,
+        )
+
+    client = _create_anthropic_client(api_key=api_key, max_retries=max_retries, http_timeout_s=effective_http_timeout_s)
 
     _add_debug(
         debug_steps,
         f"Конфиг AI: vision_model={vision_model}, structured_model={structured_model}, retries={max_retries}, "
-        f"sdk_http_timeout_s={anthropic_http_timeout_s}, vision_timeout_s={vision_timeout_s}, "
+        f"sdk_http_timeout_s={effective_http_timeout_s}, vision_timeout_s={vision_timeout_s}, "
         f"structured_parse_timeout_s={structured_parse_timeout_s}, structured_fallback_timeout_s={structured_fallback_timeout_s}, "
         f"structured_draft_max_chars={structured_draft_max_chars}",
         on_debug,
