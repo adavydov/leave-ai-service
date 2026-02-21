@@ -227,6 +227,48 @@ def _extract_text_from_msg(msg) -> str:
     return "\n".join([t for t in out if t]).strip()
 
 
+
+
+def _parse_structured_with_fallback(
+    *,
+    client: Anthropic,
+    model: str,
+    max_tokens: int,
+    draft_text: str,
+) -> LeaveRequestExtract:
+    try:
+        return client.messages.parse(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0,
+            system=_system_prompt_ru(),
+            messages=[{"role": "user", "content": _parse_prompt_ru(draft_text)}],
+            output_format=LeaveRequestExtract,
+        ).parsed_output
+    except anthropic.APIError as e:
+        # Фолбэк: parse API иногда отдает 5xx, хотя обычный messages.create работает.
+        try:
+            raw_msg = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=0,
+                system=_system_prompt_ru(),
+                messages=[{"role": "user", "content": _parse_prompt_ru_json_only(draft_text)}],
+            )
+            raw_text = _extract_text_from_msg(raw_msg)
+            raw_json = _extract_first_json_object(raw_text)
+            parsed = LeaveRequestExtract.model_validate(raw_json)
+            parsed.quality.notes.append("structured_fallback=create+json")
+            return parsed
+        except Exception as fallback_err:
+            source_err = fallback_err if isinstance(fallback_err, anthropic.APIError) else e
+            status = int(getattr(source_err, "status_code", 502) or 502)
+            raise UpstreamAIError(
+                step="structured",
+                status_code=status if status >= 400 else 502,
+                message=_safe_anthropic_error_message(source_err),
+            ) from source_err
+
 def extract_leave_request_from_pdf_bytes(
     pdf_bytes: bytes,
     filename: str = "upload.pdf",
@@ -298,37 +340,12 @@ def extract_leave_request_from_pdf_bytes(
         draft_text = "TRANSCRIPTION:\n(null)\nCANDIDATE_FIELDS:\n(null)"
 
     # 3) Structured step: text -> schema
-    try:
-        parsed = client.messages.parse(
-            model=structured_model,
-            max_tokens=out_max_tokens,
-            temperature=0,
-            system=_system_prompt_ru(),
-            messages=[{"role": "user", "content": _parse_prompt_ru(draft_text)}],
-            output_format=LeaveRequestExtract,
-        ).parsed_output
-    except anthropic.APIError as e:
-        # Фолбэк: parse API иногда отдает 5xx, хотя обычный messages.create работает.
-        try:
-            raw_msg = client.messages.create(
-                model=structured_model,
-                max_tokens=out_max_tokens,
-                temperature=0,
-                system=_system_prompt_ru(),
-                messages=[{"role": "user", "content": _parse_prompt_ru_json_only(draft_text)}],
-            )
-            raw_text = _extract_text_from_msg(raw_msg)
-            raw_json = _extract_first_json_object(raw_text)
-            parsed = LeaveRequestExtract.model_validate(raw_json)
-            parsed.quality.notes.append("structured_fallback=create+json")
-        except Exception as fallback_err:
-            source_err = fallback_err if isinstance(fallback_err, anthropic.APIError) else e
-            status = int(getattr(source_err, "status_code", 502) or 502)
-            raise UpstreamAIError(
-                step="structured",
-                status_code=status if status >= 400 else 502,
-                message=_safe_anthropic_error_message(source_err),
-            ) from source_err
+    parsed = _parse_structured_with_fallback(
+        client=client,
+        model=structured_model,
+        max_tokens=out_max_tokens,
+        draft_text=draft_text,
+    )
 
     # Мягко добавим заметку о рендере (полезно для дебага, без секретов)
     try:
