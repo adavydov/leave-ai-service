@@ -2,27 +2,163 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import anthropic
 from anthropic import Anthropic
+import fitz  # PyMuPDF
 
 from .schemas import LeaveRequestExtract
 
 
-def _leave_prompt_ru() -> str:
-    # Держим инструкцию короткой: меньше слов -> меньше фантазий модели.
+def _env_int(name: str, default: int) -> int:
+    v = os.getenv(name)
+    if v is None or v.strip() == "":
+        return default
+    try:
+        return int(v)
+    except ValueError:
+        return default
+
+
+def _env_str(name: str, default: str) -> str:
+    v = os.getenv(name)
+    return default if v is None or v.strip() == "" else v.strip()
+
+
+def _pix_to_png_bytes(pix) -> bytes:
+    # PyMuPDF в разных версиях принимает разные сигнатуры.
+    try:
+        return pix.tobytes("png")
+    except TypeError:
+        return pix.tobytes(output="png")
+
+
+def _render_pdf_to_image_blocks(pdf_bytes: bytes) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Рендерим PDF в PNG и возвращаем список content-blocks для Claude Vision.
+    Ограничиваемся первыми PDF_MAX_PAGES страницами, чтобы не улететь в лимиты.
+    """
+    max_pages = _env_int("PDF_MAX_PAGES", 1)
+    target_long_edge = _env_int("PDF_TARGET_LONG_EDGE", 1568)  # рекомендация по latency/TTFT :contentReference[oaicite:3]{index=3}
+    max_b64_bytes = _env_int("PDF_MAX_B64_BYTES", 30 * 1024 * 1024)  # запас под 32MB limit :contentReference[oaicite:4]{index=4}
+    color_mode = _env_str("PDF_COLOR_MODE", "gray").lower()  # "gray" или "rgb"
+
+    # Открываем PDF из bytes
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = doc.page_count
+    pages_to_send = min(max_pages, total_pages)
+
+    colorspace = fitz.csGRAY if color_mode == "gray" else fitz.csRGB
+
+    blocks: List[Dict[str, Any]] = []
+    page_stats: List[Dict[str, Any]] = []
+
+    try:
+        for i in range(pages_to_send):
+            page = doc.load_page(i)
+            rect = page.rect
+            long_edge_pts = max(rect.width, rect.height) or 1.0
+
+            # Масштаб так, чтобы длинная сторона была ~target_long_edge px
+            zoom = float(target_long_edge) / float(long_edge_pts)
+            zoom = max(0.5, min(zoom, 4.0))  # разумные границы
+
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat, colorspace=colorspace, alpha=False)
+
+            # Жёсткий лимит 8000x8000 на vision :contentReference[oaicite:5]{index=5}
+            if pix.width > 8000 or pix.height > 8000:
+                scale = min(8000 / pix.width, 8000 / pix.height)
+                mat = fitz.Matrix(zoom * scale, zoom * scale)
+                pix = page.get_pixmap(matrix=mat, colorspace=colorspace, alpha=False)
+
+            png_bytes = _pix_to_png_bytes(pix)
+            b64 = base64.b64encode(png_bytes).decode("ascii")
+
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": b64,
+                    },
+                }
+            )
+
+            page_stats.append(
+                {
+                    "page": i,
+                    "w_px": pix.width,
+                    "h_px": pix.height,
+                    "png_bytes": len(png_bytes),
+                    "b64_chars": len(b64),
+                }
+            )
+
+        approx_b64_bytes = sum(p["b64_chars"] for p in page_stats)
+        if approx_b64_bytes > max_b64_bytes:
+            raise RuntimeError(
+                f"Rendered images too large for request: approx_b64_bytes={approx_b64_bytes} > {max_b64_bytes}. "
+                f"Reduce PDF_MAX_PAGES or PDF_TARGET_LONG_EDGE."
+            )
+
+        info = {
+            "total_pages": total_pages,
+            "pages_sent": pages_to_send,
+            "target_long_edge": target_long_edge,
+            "color_mode": color_mode,
+            "approx_b64_bytes": approx_b64_bytes,
+            "page_stats": page_stats,
+        }
+        return blocks, info
+    finally:
+        doc.close()
+
+
+def _system_prompt_ru() -> str:
     return (
-        "Ты извлекаешь данные из скана рукописного заявления на отпуск (Россия).\n"
-        "Верни данные строго по схеме.\n"
-        "Правила:\n"
-        "1) Если поле не видно или не уверен(а) — ставь null (не выдумывай).\n"
-        "2) Даты — строго YYYY-MM-DD. Если дата дана как '01.03.26' -> '2026-03-01'.\n"
-        "3) leave.leave_type: 'annual_paid' для 'ежегодный оплачиваемый', 'unpaid' для 'без сохранения',\n"
-        "   'study' для 'учебный', 'maternity'/'childcare' для соответствующих. Иначе 'other'.\n"
-        "4) days_count — календарные дни. Если есть start_date и end_date, можешь вычислить days_count.\n"
-        "5) raw_text — 2-6 строк, которые подтверждают ключевые поля (ФИО, даты, тип).\n"
+        "Ты — помощник кадровика. Тебе дают изображения страниц заявления на отпуск (скан, возможно рукописный).\n"
+        "Нельзя выдумывать: если не видно/не уверен — null.\n"
+        "Даты только YYYY-MM-DD. Если год не указан — null и отметь в quality.notes.\n"
     )
+
+
+def _draft_prompt_ru() -> str:
+    # Первый шаг: “увидеть” и выписать факты как текст.
+    return (
+        "Считай заявление по изображениям.\n"
+        "Сделай:\n"
+        "1) Блок TRANSCRIPTION: построчная расшифровка видимого текста (как есть).\n"
+        "2) Блок CANDIDATE_FIELDS: перечисли возможные поля (employee.full_name, leave.start_date, leave.end_date, "
+        "leave.days_count, leave.leave_type, request_date, manager.full_name, подпись) в формате key: value.\n"
+        "Если не уверен — пиши null.\n"
+        "Важно: НЕ добавляй ничего, чего нет на изображении.\n"
+    )
+
+
+def _parse_prompt_ru(draft_text: str) -> str:
+    # Второй шаг: строгая структура.
+    return (
+        "На основе распознанного текста ниже заполни JSON строго по схеме.\n"
+        "Правила:\n"
+        "- Если поле не подтверждается текстом — null.\n"
+        "- raw_text: дай 2–6 строк (фрагменты), подтверждающих ключевые поля (ФИО, даты, тип).\n\n"
+        "РАСПОЗНАННЫЙ ТЕКСТ:\n"
+        f"{draft_text}\n"
+    )
+
+
+def _extract_text_from_msg(msg) -> str:
+    # msg.content — список блоков; берём все text блоки.
+    out = []
+    for blk in getattr(msg, "content", []) or []:
+        if getattr(blk, "type", None) == "text":
+            out.append(getattr(blk, "text", ""))
+        elif isinstance(blk, dict) and blk.get("type") == "text":
+            out.append(blk.get("text", ""))
+    return "\n".join([t for t in out if t]).strip()
 
 
 def extract_leave_request_from_pdf_bytes(
@@ -31,80 +167,87 @@ def extract_leave_request_from_pdf_bytes(
     *,
     model: Optional[str] = None,
 ) -> LeaveRequestExtract:
-    """
-    Отправляет PDF (base64) в Claude Messages API и получает структурированный JSON
-    по Pydantic-схеме LeaveRequestExtract через messages.parse().
-    """
-
-    if os.getenv("MOCK_MODE", "0") == "1":
+    if os.getenv("MOCK_MODE", "0").strip() == "1":
         return LeaveRequestExtract.model_validate(
             {
                 "schema_version": "1.0",
-                "employer_name": "ООО Ромашка",
+                "employer_name": None,
                 "employee": {"full_name": "Иванов Иван Иванович", "position": "Инженер", "department": "ИТ"},
-                "manager": {"full_name": "Петров Петр Петрович"},
+                "manager": {"full_name": None, "position": None},
                 "request_date": "2026-02-21",
                 "leave": {
                     "leave_type": "annual_paid",
-                    "start_date": "2026-03-02",
-                    "end_date": "2026-03-15",
+                    "start_date": "2026-03-01",
+                    "end_date": "2026-03-14",
                     "days_count": 14,
                     "comment": None,
                 },
                 "signature_present": True,
-                "signature_confidence": 0.9,
-                "raw_text": "Прошу предоставить мне ежегодный оплачиваемый отпуск\n"
-                            "с 02.03.2026 по 15.03.2026\n"
-                            "Иванов И.И. 21.02.2026",
-                "quality": {"overall_confidence": 0.75, "missing_fields": [], "notes": []},
+                "signature_confidence": 0.8,
+                "raw_text": "Прошу предоставить ежегодный оплачиваемый отпуск\nс 01.03.2026 по 14.03.2026\nИванов И.И.",
+                "quality": {"overall_confidence": 0.8, "missing_fields": [], "notes": ["MOCK_MODE=1"]},
             }
         )
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY не задан (ни в .env, ни в переменных окружения хоста).")
+        raise RuntimeError("ANTHROPIC_API_KEY не задан (Render env vars / .env).")
 
-    model = model or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    vision_model = model or os.getenv("ANTHROPIC_VISION_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    structured_model = os.getenv("ANTHROPIC_STRUCTURED_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
-    # max_tokens — это лимит генерируемого ответа (structured JSON обычно короткий).
-    # Можно поднять через env, но для MVP 1024 более чем.
-    max_tokens = int(os.getenv("ANTHROPIC_MAX_TOKENS", "1024"))
+    max_retries = _env_int("ANTHROPIC_MAX_RETRIES", 2)
+    draft_max_tokens = _env_int("ANTHROPIC_DRAFT_MAX_TOKENS", 1024)
+    out_max_tokens = _env_int("ANTHROPIC_MAX_TOKENS", 1024)
 
-    client = Anthropic(api_key=api_key)
+    client = Anthropic(api_key=api_key, max_retries=max_retries)
 
-    pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
+    # 1) PDF -> image blocks
+    image_blocks, render_info = _render_pdf_to_image_blocks(pdf_bytes)
 
+    # 2) Vision step: images -> text
     try:
-        resp = client.messages.parse(
-            model=model,
-            max_tokens=max_tokens,
+        draft_msg = client.messages.create(
+            model=vision_model,
+            max_tokens=draft_max_tokens,
             temperature=0,
-            system="Ты аккуратный парсер документов. Не выдумывай данные. Если сомневаешься — null.",
+            system=_system_prompt_ru(),
             messages=[
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "document",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "application/pdf",
-                                "data": pdf_b64,
-                            },
-                        },
-                        {"type": "text", "text": _leave_prompt_ru()},
-                    ],
+                    "content": image_blocks + [{"type": "text", "text": _draft_prompt_ru()}],  # images before text :contentReference[oaicite:6]{index=6}
                 }
             ],
-            output_format=LeaveRequestExtract,
         )
+        draft_text = _extract_text_from_msg(draft_msg)
     except anthropic.APIError as e:
-        # Тут будут и 401/403 (ключ), и 429 (лимиты/кредиты), и 5xx.
-        raise RuntimeError(f"Anthropic API error: {e}") from e
+        raise RuntimeError(f"Anthropic vision step failed: {e}. render_info={render_info}") from e
 
-    out = getattr(resp, "parsed_output", None)
-    if out is None:
-        stop_reason = getattr(resp, "stop_reason", None)
-        raise RuntimeError(f"Claude не вернул структурированный ответ. stop_reason={stop_reason}")
+    if not draft_text:
+        draft_text = "TRANSCRIPTION:\n(null)\nCANDIDATE_FIELDS:\n(null)"
 
-    return out
+    # 3) Structured step: text -> schema
+    try:
+        parsed = client.messages.parse(
+            model=structured_model,
+            max_tokens=out_max_tokens,
+            temperature=0,
+            system=_system_prompt_ru(),
+            messages=[{"role": "user", "content": _parse_prompt_ru(draft_text)}],
+            output_format=LeaveRequestExtract,
+        ).parsed_output
+    except anthropic.APIError as e:
+        raise RuntimeError(f"Anthropic structured step failed: {e}. render_info={render_info}") from e
+
+    # Мягко добавим заметку о рендере (полезно для дебага, без секретов)
+    try:
+        parsed.quality.notes.append(
+            f"render: pages_sent={render_info['pages_sent']}/{render_info['total_pages']}, "
+            f"target_long_edge={render_info['target_long_edge']}, "
+            f"approx_b64_bytes={render_info['approx_b64_bytes']}, "
+            f"color_mode={render_info['color_mode']}"
+        )
+    except Exception:
+        pass
+
+    return parsed
