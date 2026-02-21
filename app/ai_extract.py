@@ -59,6 +59,15 @@ def _safe_anthropic_error_message(err: Exception) -> str:
     return "Не удалось обработать документ во внешнем AI-сервисе."
 
 
+def _should_try_vision_fallback(err: Exception, primary_model: str, fallback_model: Optional[str]) -> bool:
+    fallback = (fallback_model or "").strip()
+    if not fallback:
+        return False
+    if fallback == (primary_model or "").strip():
+        return False
+    return _is_overloaded_error(err)
+
+
 def _env_int(name: str, default: int) -> int:
     v = os.getenv(name)
     if v is None or v.strip() == "":
@@ -488,6 +497,7 @@ def extract_leave_request_with_debug(
 
     vision_model = model or os.getenv("ANTHROPIC_VISION_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     structured_model = os.getenv("ANTHROPIC_STRUCTURED_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    vision_fallback_model = os.getenv("ANTHROPIC_VISION_FALLBACK_MODEL")
     max_retries = _env_int("ANTHROPIC_MAX_RETRIES", 0)
     anthropic_http_timeout_s = _env_int_min("ANTHROPIC_HTTP_TIMEOUT_S", 60, 10)
     draft_max_tokens = _env_int_min("ANTHROPIC_DRAFT_MAX_TOKENS", 1024, 256)
@@ -514,7 +524,7 @@ def extract_leave_request_with_debug(
         f"Конфиг AI: vision_model={vision_model}, structured_model={structured_model}, retries={max_retries}, "
         f"sdk_http_timeout_s={effective_http_timeout_s}, vision_timeout_s={vision_timeout_s}, "
         f"structured_parse_timeout_s={structured_parse_timeout_s}, structured_fallback_timeout_s={structured_fallback_timeout_s}, "
-        f"structured_draft_max_chars={structured_draft_max_chars}",
+        f"structured_draft_max_chars={structured_draft_max_chars}, vision_fallback_model={vision_fallback_model or '-'}",
         on_debug,
     )
 
@@ -532,17 +542,17 @@ def extract_leave_request_with_debug(
     try:
         _add_debug(debug_steps, "Шаг vision: отправка PNG в Anthropic", on_debug)
 
-        def _vision_call():
+        def _vision_call(selected_model: str):
             scoped = _client_with_timeout(client, vision_timeout_s + 5)
             return scoped.messages.create(
-                model=vision_model,
+                model=selected_model,
                 max_tokens=draft_max_tokens,
                 temperature=0,
                 system=_system_prompt_ru(),
                 messages=[{"role": "user", "content": image_blocks + [{"type": "text", "text": _draft_prompt_ru()}]}],
             )
 
-        draft_msg = _run_with_timeout(_vision_call, vision_timeout_s, "vision")
+        draft_msg = _run_with_timeout(lambda: _vision_call(vision_model), vision_timeout_s, "vision")
         draft_text = _extract_text_from_msg(draft_msg)
         _add_debug(debug_steps, f"Шаг vision: ответ получен, chars={len(draft_text)}", on_debug)
         rid = _request_id_of(draft_msg)
@@ -552,11 +562,32 @@ def extract_leave_request_with_debug(
         _add_debug(debug_steps, "Шаг vision: timeout", on_debug)
         _raise_timeout("vision", e, debug_steps)
     except anthropic.APIError as e:
-        _add_debug(debug_steps, f"Шаг vision: ошибка API: {type(e).__name__}", on_debug)
+        status_code = int(getattr(e, "status_code", 0) or 0)
+        _add_debug(debug_steps, f"Шаг vision: ошибка API: {type(e).__name__}, status={status_code}", on_debug)
         rid = _request_id_of(e)
         if rid:
             _add_debug(debug_steps, f"Шаг vision: error_request_id={rid}", on_debug)
-        _raise_upstream("vision", e, debug_steps)
+        if _should_try_vision_fallback(e, vision_model, vision_fallback_model):
+            _add_debug(debug_steps, f"Шаг vision: overloaded; пробуем fallback model={vision_fallback_model}", on_debug)
+            try:
+                draft_msg = _run_with_timeout(lambda: _vision_call(str(vision_fallback_model)), vision_timeout_s, "vision.fallback")
+                draft_text = _extract_text_from_msg(draft_msg)
+                _add_debug(debug_steps, f"Шаг vision.fallback: ответ получен, chars={len(draft_text)}", on_debug)
+                rid = _request_id_of(draft_msg)
+                if rid:
+                    _add_debug(debug_steps, f"Шаг vision.fallback: request_id={rid}", on_debug)
+            except TimeoutError as fallback_timeout:
+                _add_debug(debug_steps, "Шаг vision.fallback: timeout", on_debug)
+                _raise_timeout("vision", fallback_timeout, debug_steps)
+            except anthropic.APIError as fallback_error:
+                fallback_status = int(getattr(fallback_error, "status_code", 0) or 0)
+                _add_debug(debug_steps, f"Шаг vision.fallback: ошибка API: {type(fallback_error).__name__}, status={fallback_status}", on_debug)
+                rid = _request_id_of(fallback_error)
+                if rid:
+                    _add_debug(debug_steps, f"Шаг vision.fallback: error_request_id={rid}", on_debug)
+                _raise_upstream("vision", fallback_error, debug_steps)
+        else:
+            _raise_upstream("vision", e, debug_steps)
 
     if not draft_text:
         draft_text = "TRANSCRIPTION:\n(null)\nCANDIDATE_FIELDS:\n(null)"
