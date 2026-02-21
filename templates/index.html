@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Leave AI Service (MVP)</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    button { padding: 8px 12px; cursor: pointer; }
+    pre { background: #111; color: #eee; padding: 12px; border-radius: 8px; overflow: auto; }
+    .hint { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Leave AI Service (MVP)</h1>
+  <p class="hint">Пока что это проверка инфраструктуры: загрузили PDF → получили JSON. Потом добавим ИИ и проверки по ТК.</p>
+
+  <div class="row">
+    <input type="file" id="file" accept="application/pdf" />
+    <button id="upload">Загрузить</button>
+  </div>
+
+  <h3>Ответ</h3>
+  <pre id="out">{}</pre>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
