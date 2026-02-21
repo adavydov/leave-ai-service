@@ -1,7 +1,5 @@
 import { byId, escapeHtml, fieldToId, severityRank, smartErrorTitle } from './utils.js';
 
-const categoryOrder = ['document','dates','counts','signature','law_hints','quality','system','upstream','unknown'];
-
 export function humanLeaveType(v) {
   const m = { annual_paid:'Ежегодный оплачиваемый', unpaid:'Без сохранения ЗП', study:'Учебный', maternity:'По беременности и родам', childcare:'По уходу за ребёнком', other:'Другой', unknown:'Не определён' };
   return m[v] || v || '—';
@@ -40,71 +38,63 @@ function row(label, value, field) {
 }
 
 function issueList(state) {
-  const raw = state.result?.issues || [];
-  const filtered = raw
-    .filter((i) => state.filters.severity === 'all' || i.severity === state.filters.severity)
-    .filter((i) => state.filters.category === 'all' || (i.category || 'unknown') === state.filters.category)
-    .filter((i) => !state.filters.search || `${i.message || ''} ${i.hint || ''} ${i.field || ''} ${i.code || ''}`.toLowerCase().includes(state.filters.search.toLowerCase()))
-    .sort((a,b) => severityRank(a.severity) - severityRank(b.severity) || String(a.category||'').localeCompare(String(b.category||'')));
-  return filtered;
+  return (state.result?.issues || [])
+    .filter((i) => i.severity !== 'info')
+    .sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
 }
 
 function renderIssues(state) {
   const root = byId('issuesExplorer');
   const raw = state.result?.issues || [];
-  byId('issuesSummary').textContent = `Ошибок: ${raw.filter((i) => i.severity==='error').length} • Предупреждений: ${raw.filter((i) => i.severity==='warn').length} • Инфо: ${raw.filter((i) => i.severity==='info').length}`;
+  const critical = raw.filter((i) => i.severity === 'error').length;
+  const nonCritical = raw.filter((i) => i.severity === 'warn').length;
+  byId('issuesSummary').textContent = `Критичных: ${critical} • Некритичных: ${nonCritical}`;
 
   const filtered = issueList(state);
   if (!filtered.length) {
-    root.innerHTML = '<p class="muted">Ошибок не найдено</p>';
+    root.innerHTML = '<p class="muted">Проблем не найдено. Файл можно отправлять.</p>';
     return;
   }
 
-  const grouped = {};
-  filtered.forEach((i) => { const c = i.category || 'unknown'; (grouped[c] ||= []).push(i); });
-  const cats = [...categoryOrder.filter((c) => grouped[c]), ...Object.keys(grouped).filter((c) => !categoryOrder.includes(c))];
-  root.innerHTML = cats.map((cat) => `
-    <details class="issue-group" open>
-      <summary><strong>${escapeHtml(cat)}</strong> (${grouped[cat].length})</summary>
-      ${grouped[cat].map((it, idx) => `
-        <article class="issue-card sev-${escapeHtml(it.severity || 'info')} ${state.selectedIssue === it ? 'is-selected' : ''}">
-          <div><span class="badge ${escapeHtml(it.severity || 'info')}">${escapeHtml(it.severity || 'info')}</span> ${escapeHtml(it.message || '')}</div>
-          ${it.hint ? `<div class="muted">Как исправить: ${escapeHtml(it.hint)}</div>` : ''}
-          <div class="row">
-            <button type="button" class="selectIssueBtn" data-issue-index="${idx}" data-category="${escapeHtml(cat)}">Выбрать</button>
-            ${it.field ? `<button type="button" class="linkToField" data-field="${escapeHtml(it.field)}">Где: ${escapeHtml(it.field)}</button>` : `<button type="button" class="linkToCategory" data-category="${escapeHtml(cat)}">Перейти к секции</button>`}
-          </div>
-          <details><summary>Подробнее</summary><div class="muted">code: ${escapeHtml(it.code || '—')} | source: ${escapeHtml(it.source || '—')}</div></details>
-        </article>`).join('')}
-    </details>`).join('');
-
-  root.dataset.filteredIssues = JSON.stringify(filtered);
+  root.innerHTML = filtered.map((it) => `
+    <article class="issue-card sev-${escapeHtml(it.severity || 'info')}">
+      <div><strong>Проблема:</strong> ${escapeHtml(it.message || '—')}</div>
+      <div class="issue-meta"><strong>Где в документе:</strong> ${escapeHtml(it.field || 'Общая проверка документа')}</div>
+      <div class="issue-meta"><strong>Что сделать:</strong> ${escapeHtml(it.hint || 'Проверьте данные в заявлении.')}</div>
+      <details class="issue-meta"><summary>Технические детали</summary><span class="muted">code: ${escapeHtml(it.code || '—')} | category: ${escapeHtml(it.category || 'unknown')} | source: ${escapeHtml(it.source || '—')}</span></details>
+    </article>`).join('');
 }
 
 function renderDecision(state) {
-  const decision = state.result?.decision;
-  const topIssue = (state.result?.issues || []).find((i) => i.severity === 'error') || (state.result?.issues || [])[0];
   const banner = byId('decisionBanner');
-  if (!decision) {
-    byId('decisionTitle').textContent = state.phase === 'error' ? (state.error?.title || 'Ошибка') : 'Ожидание проверки';
-    byId('decisionReason').textContent = state.phase === 'error' ? (state.error?.detail || state.error?.error || '') : 'Загрузите PDF, чтобы получить решение.';
-    banner.className = 'decision';
+  if (state.phase === 'uploading' || state.phase === 'processing') {
+    byId('decisionTitle').textContent = 'Проверяем документ…';
+    byId('decisionReason').textContent = 'Подождите, анализ обычно занимает несколько секунд.';
+    banner.className = 'card decision warn';
     return;
   }
-  const isError = decision.needs_rewrite || decision.status === 'error';
-  byId('decisionTitle').textContent = isError ? '❌ Нужно переписать' : (decision.status === 'warn' ? '⚠ Нужна проверка' : '✅ Можно отправлять');
-  byId('decisionReason').textContent = topIssue?.message || decision.summary || '';
-  banner.className = `decision ${isError ? 'error' : decision.status === 'warn' ? 'warn' : 'ok'}`;
-}
 
-function renderTabs(state) {
-  document.querySelectorAll('.tab').forEach((t) => {
-    const active = t.dataset.tab === state.activeTab;
-    t.classList.toggle('is-active', active);
-  });
-  ['issues','data','text','export'].forEach((name) => {
-    byId(`tab-${name}`).classList.toggle('hidden', state.activeTab !== name);
-  });
+  if (state.phase === 'error') {
+    byId('decisionTitle').textContent = 'Не удалось проверить файл';
+    byId('decisionReason').textContent = state.error?.detail || state.error?.error || 'Попробуйте отправить файл ещё раз.';
+    banner.className = 'card decision error';
+    return;
+  }
+
+  const decision = state.result?.decision;
+  if (!decision) {
+    byId('decisionTitle').textContent = '2) Статус проверки';
+    byId('decisionReason').textContent = 'Загрузите PDF, чтобы начать проверку.';
+    banner.className = 'card decision';
+    return;
+  }
+
+  const hasErrors = decision.needs_rewrite || decision.status === 'error' || (state.result?.issues || []).some((i) => i.severity === 'error');
+  byId('decisionTitle').textContent = hasErrors ? 'Нужно исправить' : 'Можно отправлять';
+  byId('decisionReason').textContent = hasErrors
+    ? 'Ниже список того, что нужно поправить в файле.'
+    : 'Критичных ошибок нет, заявление готово к отправке.';
+  banner.className = `card decision ${hasErrors ? 'error' : 'ok'}`;
 }
 
 function renderDataAndText(state) {
@@ -166,62 +156,44 @@ function renderEditForm(state) {
     </div>`;
 }
 
-function renderInspector(state) {
-  const empty = byId('inspectorEmpty');
-  const body = byId('inspectorBody');
-  const issue = state.selectedIssue;
-  if (!issue) {
-    empty.classList.remove('hidden');
-    body.classList.add('hidden');
-    byId('inspectorEditor').innerHTML = '';
-    return;
-  }
-  empty.classList.add('hidden');
-  body.classList.remove('hidden');
-  byId('inspectorMessage').textContent = issue.message || '—';
-  byId('inspectorHint').textContent = issue.hint || 'Проверьте вручную';
-  byId('inspectorField').textContent = issue.field || '—';
-
-  if (issue.field) {
-    const val = getByPath(state.editableExtract || state.result?.extract || {}, issue.field);
-    byId('inspectorEditor').innerHTML = `<label>Изменить значение <input id="inspectorValue" value="${escapeHtml(String(val ?? ''))}" /></label>`;
-  } else {
-    byId('inspectorEditor').innerHTML = '<p class="muted">Для этой ошибки нет прямого поля. Проверьте данные во вкладке «Данные».</p>';
-  }
-}
-
-function getByPath(obj, path) {
-  return String(path || '').split('.').reduce((acc, p) => (acc ? acc[p] : undefined), obj);
-}
-
 export function render(state) {
-  const status = state.phase === 'done' ? (state.result?.decision?.status || 'ok') : state.phase === 'error' ? 'error' : state.phase;
-  byId('headerBadge').textContent = String(status).toUpperCase();
-  byId('headerBadge').className = `badge ${status === 'error' ? 'error' : status === 'warn' ? 'warn' : status === 'ok' ? 'ok' : ''}`;
+  const statusEl = byId('headerBadge');
+  if (state.phase === 'uploading' || state.phase === 'processing') {
+    statusEl.textContent = 'Статус: проверяем';
+    statusEl.className = 'badge warn';
+  } else if (state.phase === 'error') {
+    statusEl.textContent = 'Статус: ошибка';
+    statusEl.className = 'badge error';
+  } else if (state.phase === 'done' && (state.result?.decision?.needs_rewrite || state.result?.decision?.status === 'error')) {
+    statusEl.textContent = 'Статус: нужно исправить';
+    statusEl.className = 'badge error';
+  } else if (state.phase === 'done') {
+    statusEl.textContent = 'Статус: можно отправлять';
+    statusEl.className = 'badge ok';
+  } else {
+    statusEl.textContent = 'Статус: ожидание';
+    statusEl.className = 'badge';
+  }
 
   const done = state.steps.filter((s) => s.status === 'done').length;
   const active = state.steps.some((s) => s.status === 'active') ? 1 : 0;
   const progress = Math.round(((done + active * 0.5) / state.steps.length) * 100);
   byId('progressBar').style.width = `${progress}%`;
   byId('progress').setAttribute('aria-valuenow', String(progress));
-
-  requestAnimationFrame(() => {
-    byId('stepper').innerHTML = state.steps.map((s) => `<div class="step ${s.status === 'done' ? 'done' : s.status === 'active' ? 'active' : ''}">${escapeHtml(s.label + (s.key === 'check' && state.fallbackUsed ? ' (fallback)' : ''))}</div>`).join('');
-  });
-
   byId('logs').innerHTML = state.logs.map((x) => `<li>${escapeHtml(x)}</li>`).join('');
 
   renderDecision(state);
-  renderTabs(state);
   renderIssues(state);
   renderDataAndText(state);
   renderEditForm(state);
-  renderInspector(state);
 
   const isError = state.phase === 'error';
   byId('errorCard').classList.toggle('hidden', !isError);
   byId('retryBtn').classList.toggle('hidden', !isError);
   byId('cancelBtn').classList.toggle('hidden', !(state.phase === 'uploading' || state.phase === 'processing'));
+
+  byId('quickDownloadTextBtn').disabled = !state.result;
+  byId('quickDownloadJsonBtn').disabled = !state.result;
 
   if (isError) {
     const title = state.error?.title || smartErrorTitle(state.error?.status || 0, (state.error?.issues || []).map((i) => i.code));
@@ -234,7 +206,7 @@ export function render(state) {
 export function scrollToFieldOrCategory(field, category) {
   let node = null;
   if (field) node = document.getElementById(fieldToId(field));
-  if (!node && category) node = document.querySelector('#issuesExplorer details');
+  if (!node && category) node = document.querySelector('#issuesExplorer .issue-card');
   if (!node) return;
   node.scrollIntoView({ behavior: 'smooth', block: 'center' });
   node.classList.add('field-highlight');
