@@ -11,6 +11,27 @@ import fitz  # PyMuPDF
 from .schemas import LeaveRequestExtract
 
 
+class UpstreamAIError(RuntimeError):
+    def __init__(self, *, step: str, status_code: int, message: str):
+        super().__init__(message)
+        self.step = step
+        self.status_code = status_code
+
+
+def _safe_anthropic_error_message(err: Exception) -> str:
+    text = str(err or "").lower()
+    status_code = int(getattr(err, "status_code", 502) or 502)
+
+    if status_code == 429:
+        return "AI-сервис временно перегружен (rate limit). Повторите попытку через минуту."
+    if status_code in (400, 413, 422):
+        return "AI-сервис отклонил запрос к документу. Попробуйте другой PDF или уменьшите его размер."
+    if status_code >= 500 or "internal server error" in text or "bad gateway" in text:
+        return "AI-сервис временно недоступен. Повторите попытку позже."
+
+    return "Не удалось обработать документ во внешнем AI-сервисе."
+
+
 def _env_int(name: str, default: int) -> int:
     v = os.getenv(name)
     if v is None or v.strip() == "":
@@ -221,7 +242,12 @@ def extract_leave_request_from_pdf_bytes(
         )
         draft_text = _extract_text_from_msg(draft_msg)
     except anthropic.APIError as e:
-        raise RuntimeError(f"Anthropic vision step failed: {e}. render_info={render_info}") from e
+        status = int(getattr(e, "status_code", 502) or 502)
+        raise UpstreamAIError(
+            step="vision",
+            status_code=status if status >= 400 else 502,
+            message=_safe_anthropic_error_message(e),
+        ) from e
 
     if not draft_text:
         draft_text = "TRANSCRIPTION:\n(null)\nCANDIDATE_FIELDS:\n(null)"
@@ -237,7 +263,12 @@ def extract_leave_request_from_pdf_bytes(
             output_format=LeaveRequestExtract,
         ).parsed_output
     except anthropic.APIError as e:
-        raise RuntimeError(f"Anthropic structured step failed: {e}. render_info={render_info}") from e
+        status = int(getattr(e, "status_code", 502) or 502)
+        raise UpstreamAIError(
+            step="structured",
+            status_code=status if status >= 400 else 502,
+            message=_safe_anthropic_error_message(e),
+        ) from e
 
     # Мягко добавим заметку о рендере (полезно для дебага, без секретов)
     try:
