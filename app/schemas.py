@@ -145,6 +145,7 @@ class Trace(BaseModel):
 
 class ApiResponse(BaseModel):
     extract: LeaveRequestExtract
-    validation: List[ValidationIssue]
-    compliance: List[ComplianceIssue] = Field(default_factory=list)
+    issues: List[Issue] = Field(default_factory=list)
+    decision: Decision
+    trace: Trace
     needs_rewrite: bool = False
