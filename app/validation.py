@@ -38,7 +38,7 @@ def validate_extract(ex: LeaveRequestExtract) -> List[ValidationIssue]:
     if sd and ed and ed < sd:
         add("error", "dates_inverted", "Дата окончания раньше даты начала.")
 
-    if ex.quality.overall_confidence < 0.6:
+    if ex.quality.overall_confidence is not None and ex.quality.overall_confidence < 0.6:
         add("warn", "low_confidence", f"Низкая уверенность распознавания: {ex.quality.overall_confidence:.2f}")
 
     return issues
