@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from app.compliance import run_compliance_checks
+from app.compliance import COMPLIANCE_RULES_VERSION, run_compliance_checks
 from app.schemas import LeaveRequestExtract
 
 
@@ -44,7 +44,12 @@ def test_days_count_mismatch_error():
     issues, _ = run_compliance_checks(ex)
     codes = _codes(issues)
     assert "days_count_mismatch" in codes
-    assert codes["days_count_mismatch"].details == {"expected": 7, "actual": 8}
+    assert codes["days_count_mismatch"].details == {
+        "rule_id": "days_count_mismatch",
+        "law_ref": None,
+        "expected": 7,
+        "actual": 8,
+    }
 
 
 def test_annual_paid_part_lt14_warn_not_error():
@@ -62,3 +67,8 @@ def test_missing_signature_error():
     assert "missing_signature" in codes
     assert codes["missing_signature"].level == "error"
     assert needs_rewrite is True
+
+
+def test_compliance_rules_version_format():
+    assert isinstance(COMPLIANCE_RULES_VERSION, str)
+    assert COMPLIANCE_RULES_VERSION

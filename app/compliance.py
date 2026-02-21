@@ -6,6 +6,9 @@ from typing import Any, Optional
 from .schemas import ComplianceIssue, LeaveRequestExtract
 
 
+COMPLIANCE_RULES_VERSION = "1.1"
+
+
 def _parse_iso(s: Optional[str]) -> Optional[date]:
     if not s:
         return None
@@ -21,6 +24,19 @@ def _text(v: Optional[str]) -> str:
 
 def run_compliance_checks(extract: LeaveRequestExtract) -> tuple[list[ComplianceIssue], bool]:
     issues: list[ComplianceIssue] = []
+
+    def details(
+        rule_id: str,
+        law_ref: Optional[str] = None,
+        expected: Optional[str | int | float] = None,
+        actual: Optional[str | int | float] = None,
+    ) -> dict[str, Optional[str | int | float]]:
+        return {
+            "rule_id": rule_id,
+            "law_ref": law_ref,
+            "expected": expected,
+            "actual": actual,
+        }
 
     def add(level: str, code: str, message: str, field: Optional[str] = None, details: Optional[dict[str, Any]] = None) -> None:
         issues.append(ComplianceIssue(level=level, code=code, field=field, message=message, details=details))
@@ -63,7 +79,12 @@ def run_compliance_checks(extract: LeaveRequestExtract) -> tuple[list[Compliance
                     "short_notice",
                     "До начала отпуска меньше 14 дней. По практике/графику отпусков может потребоваться согласование.",
                     "request_date",
-                    {"days_before_start": delta},
+                    details(
+                        rule_id="short_notice",
+                        law_ref="ТК РФ ст. 123",
+                        expected=14,
+                        actual=delta,
+                    ),
                 )
 
         expected_days: Optional[int] = None
@@ -79,7 +100,11 @@ def run_compliance_checks(extract: LeaveRequestExtract) -> tuple[list[Compliance
                     "days_count_mismatch",
                     "Количество дней не совпадает с диапазоном дат (инклюзивно).",
                     "leave.days_count",
-                    {"expected": expected_days, "actual": extract.leave.days_count},
+                    details(
+                        rule_id="days_count_mismatch",
+                        expected=expected_days,
+                        actual=extract.leave.days_count,
+                    ),
                 )
         elif expected_days is not None:
             add(
@@ -87,7 +112,10 @@ def run_compliance_checks(extract: LeaveRequestExtract) -> tuple[list[Compliance
                 "missing_days_count",
                 "Лучше указать количество календарных дней, чтобы не было разночтений.",
                 "leave.days_count",
-                {"expected": expected_days},
+                details(
+                    rule_id="missing_days_count",
+                    expected=expected_days,
+                ),
             )
 
         # D) TK-oriented hints

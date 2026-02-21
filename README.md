@@ -64,3 +64,62 @@ gunicorn app.main:app -c gunicorn_conf.py
 - `RENDER_DEPLOY_HOOK_URL` — Deploy Hook URL из Render сервиса.
 
 После этого каждый merge в `main` будет автоматически триггерить deploy.
+
+## API: пример ответа `/api/extract`
+
+Ниже пример сериализованного ответа. Поля `compliance_rules_version` и `compliance[].details` являются опциональными для обратной совместимости.
+
+```json
+{
+  "extract": {
+    "schema_version": "1.0",
+    "employer_name": "ООО Ромашка",
+    "employee": {
+      "full_name": "Иванов Иван Иванович",
+      "position": "Инженер",
+      "department": "ИТ",
+      "personnel_number": "1234"
+    },
+    "manager": {
+      "full_name": "Петров Петр Петрович",
+      "position": "Директор"
+    },
+    "request_date": "2026-01-10",
+    "leave": {
+      "leave_type": "annual_paid",
+      "start_date": "2026-02-01",
+      "end_date": "2026-02-14",
+      "days_count": 14,
+      "comment": "Согласно графику отпусков"
+    },
+    "signature_present": true,
+    "signature_confidence": 0.92,
+    "raw_text": "...",
+    "quality": {
+      "overall_confidence": 0.95,
+      "missing_fields": [],
+      "notes": []
+    }
+  },
+  "validation": [],
+  "compliance": [
+    {
+      "level": "warn",
+      "code": "missing_days_count",
+      "field": "leave.days_count",
+      "message": "Лучше указать количество календарных дней, чтобы не было разночтений.",
+      "details": {
+        "rule_id": "missing_days_count",
+        "law_ref": null,
+        "expected": 14,
+        "actual": null
+      }
+    }
+  ],
+  "needs_rewrite": false,
+  "compliance_rules_version": "1.1",
+  "debug_steps": [
+    "..."
+  ]
+}
+```

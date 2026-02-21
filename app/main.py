@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .ai_extract import UpstreamAIError, extract_leave_request_with_debug
-from .compliance import run_compliance_checks
+from .compliance import COMPLIANCE_RULES_VERSION, run_compliance_checks
 from .schemas import ApiResponse
 from .validation import validate_extract
 
@@ -149,6 +149,7 @@ async def api_extract(file: UploadFile = File(...)):
             validation=validation,
             compliance=compliance,
             needs_rewrite=needs_rewrite,
+            compliance_rules_version=COMPLIANCE_RULES_VERSION,
         ).model_dump()
         resp["debug_steps"] = debug_steps
         return resp
@@ -175,6 +176,7 @@ async def api_extract_stream(file: UploadFile = File(...)):
                 validation=validation,
                 compliance=compliance,
                 needs_rewrite=needs_rewrite,
+                compliance_rules_version=COMPLIANCE_RULES_VERSION,
             ).model_dump()
             resp["debug_steps"] = debug_steps
             events.put({"type": "result", "ok": True, "status": 200, "payload": resp})

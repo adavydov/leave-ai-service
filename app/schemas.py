@@ -106,7 +106,7 @@ class ComplianceIssue(BaseModel):
     code: str
     field: Optional[str] = None
     message: str
-    details: Optional[dict] = None
+    details: Optional[dict[str, Optional[str | int | float]]] = None
 
 
 class ApiResponse(BaseModel):
@@ -114,3 +114,4 @@ class ApiResponse(BaseModel):
     validation: List[ValidationIssue]
     compliance: List[ComplianceIssue] = Field(default_factory=list)
     needs_rewrite: bool = False
+    compliance_rules_version: Optional[str] = Field(None, description="Версия набора compliance-правил")
