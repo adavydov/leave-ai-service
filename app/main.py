@@ -92,40 +92,48 @@ async def api_extract(file: UploadFile = File(...)):
     except UpstreamAIError as e:
         raise HTTPException(status_code=e.status_code, detail=_sanitize_error_message(e))
     except Exception as e:
-        status = 502 if _is_upstream_ai_error(e) else 500
-        raise HTTPException(status_code=status, detail=_sanitize_upstream_error(e))
+        if _looks_like_upstream_ai_error(e):
+            raise HTTPException(status_code=502, detail="AI-сервис временно недоступен. Повторите попытку позже.")
+        raise HTTPException(status_code=500, detail=_sanitize_error_message(e))
 
 
-def _is_upstream_ai_error(err: Exception) -> bool:
-    message = str(err or "").lower()
+def _iter_exception_chain(err: Exception):
+    seen = set()
+    cur = err
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        yield cur
+        cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+
+
+def _looks_like_upstream_ai_error(err: Exception) -> bool:
     markers = (
         "anthropic",
-        "structured step failed",
-        "vision step failed",
-        "api_error",
         "internal server error",
-        "gateway",
+        "api_error",
         "bad gateway",
+        "gateway",
+        "overloaded",
+        "rate limit",
         "upstream",
     )
-    return isinstance(err, anthropic.APIError) or any(marker in message for marker in markers)
+    for exc in _iter_exception_chain(err):
+        if isinstance(exc, (UpstreamAIError, anthropic.APIError)):
+            return True
+        text = str(exc or "").lower()
+        if any(marker in text for marker in markers):
+            return True
+    return False
 
 
-def _sanitize_upstream_error(err: Exception) -> str:
-    """Убираем HTML/технические детали и отдаём безопасный текст ошибки."""
-    message = str(err or "").strip()
+def _sanitize_error_message(err: Exception) -> str:
+    message = re.sub(r"<[^>]+>", " ", str(err or "")).strip()
+    message = re.sub(r"\s+", " ", message).strip(" .,:;-")
     if not message:
         return f"Ошибка обработки: {type(err).__name__}"
-
-    message = re.sub(r"render_info\s*=\s*\{.*", "", message, flags=re.IGNORECASE)
-    message = re.sub(r'request_id[\'"]?\s*[:=]\s*[\'"][^\'"]+[\'"]', "", message, flags=re.IGNORECASE)
-    message = re.sub(r"<[^>]+>", " ", message)
-    message = re.sub(r"\s+", " ", message).strip(" .,:;-")
-
-    if _is_upstream_ai_error(err):
-        return "Ошибка внешнего AI-сервиса. Повторите попытку позже."
-
-    return f"Ошибка обработки: {type(err).__name__}: {message[:220]}"
+    if message.lower() == "internal server error":
+        return "Ошибка обработки документа. Повторите попытку позже."
+    return message[:220]
 
 @app.get("/api/version")
 async def api_version():
