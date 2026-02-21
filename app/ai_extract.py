@@ -148,8 +148,11 @@ def _parse_prompt_ru_json_only(draft_text: str) -> str:
         "Критично: поле leave.leave_type верни только одним из canonical значений: "
         "annual_paid | unpaid | study | maternity | childcare | other | unknown.\n"
         "Если поле не подтверждается текстом — null.\n"
-        "Структура: schema_version, employer_name, employee, manager, request_date, leave, "
-        "signature_present, signature_confidence, raw_text, quality.\n\n"
+        "Структура верхнего уровня: schema_version, employer_name, employee, manager, request_date, leave, "
+        "signature_present, signature_confidence, raw_text, quality.\n"
+        "Структура leave: leave_type, start_date, end_date, days_count, comment, reason_text, "
+        "is_part_of_annual_leave, schedule_reference.\n"
+        "Все даты строго YYYY-MM-DD.\n\n"
         "РАСПОЗНАННЫЙ ТЕКСТ:\n"
         f"{draft_text}\n"
     )

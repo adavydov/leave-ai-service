@@ -33,6 +33,9 @@ class LeaveInfo(BaseModel):
     end_date: Optional[str] = Field(None, description="YYYY-MM-DD")
     days_count: Optional[int] = Field(None, description="Количество календарных дней")
     comment: Optional[str] = Field(None, description="Примечание/основание/период и т.п.")
+    reason_text: Optional[str] = Field(None, description="Текстовое основание отпуска (если указано)")
+    is_part_of_annual_leave: Optional[bool] = Field(None, description="Является ли период частью ежегодного отпуска")
+    schedule_reference: Optional[str] = Field(None, description="Ссылка/упоминание графика отпусков (если есть в заявлении)")
 
     @field_validator("leave_type", mode="before")
     @classmethod
@@ -107,6 +110,9 @@ class ComplianceIssue(BaseModel):
     field: Optional[str] = None
     message: str
     details: Optional[dict] = None
+    rule_id: Optional[str] = None
+    legal_basis: Optional[str] = None
+    action_hint: Optional[str] = None
 
 
 IssueSeverity = Literal["error", "warn", "info"]

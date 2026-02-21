@@ -64,3 +64,9 @@ gunicorn app.main:app -c gunicorn_conf.py
 - `RENDER_DEPLOY_HOOK_URL` — Deploy Hook URL из Render сервиса.
 
 После этого каждый merge в `main` будет автоматически триггерить deploy.
+
+## Проверки ТК РФ (MVP)
+
+- В сервис добавлен каталог MVP-правил соответствия с `rule_id`, `legal_basis` и `action_hint`.
+- Спецификация покрываемых правил и границ MVP: `docs/tk_mvp_rules.md`.
+- Технические OCR-подсказки отделены от критичных юридических ошибок в слое принятия решения.
