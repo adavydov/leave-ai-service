@@ -65,10 +65,6 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _env_int_min(name: str, default: int, minimum: int) -> int:
-    return max(minimum, _env_int(name, default))
-
-
 def _env_str(name: str, default: str) -> str:
     v = os.getenv(name)
     return default if v is None or v.strip() == "" else v.strip()
@@ -369,21 +365,21 @@ def _render_pdf_to_image_blocks(
             blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}})
             page_stats.append({"page": i, "w_px": pix.width, "h_px": pix.height, "png_bytes": len(png_bytes), "b64_chars": len(b64)})
 
-        approx_b64_bytes = sum(p["b64_chars"] for p in page_stats)
-        if approx_b64_bytes > max_b64_bytes:
-            raise RuntimeError(f"Rendered images too large for request: approx_b64_bytes={approx_b64_bytes} > {max_b64_bytes}.")
+        approx_b64_chars = sum(p["b64_chars"] for p in page_stats)
+        if approx_b64_chars > max_b64_chars:
+            raise RuntimeError(f"Rendered images too large for request: approx_b64_chars={approx_b64_chars} > {max_b64_chars}.")
 
         info = {
             "total_pages": total_pages,
             "pages_sent": pages_to_send,
             "target_long_edge": target_long_edge,
             "color_mode": color_mode,
-            "approx_b64_bytes": approx_b64_bytes,
+            "approx_b64_chars": approx_b64_chars,
             "page_stats": page_stats,
         }
         _add_debug(
             debug_steps,
-            f"PDF->PNG ок: pages_sent={pages_to_send}, approx_b64_bytes={approx_b64_bytes}, page0={page_stats[0] if page_stats else None}",
+            f"PDF->PNG ок: pages_sent={pages_to_send}, approx_b64_chars={approx_b64_chars}, page0={page_stats[0] if page_stats else None}",
             on_debug,
         )
         return blocks, info
@@ -596,7 +592,7 @@ def extract_leave_request_with_debug(
     try:
         parsed.quality.notes.append(
             f"render: pages_sent={render_info['pages_sent']}/{render_info['total_pages']}, "
-            f"target_long_edge={render_info['target_long_edge']}, approx_b64_bytes={render_info['approx_b64_bytes']}, "
+            f"target_long_edge={render_info['target_long_edge']}, approx_b64_chars={render_info['approx_b64_chars']}, "
             f"color_mode={render_info['color_mode']}"
         )
     except Exception:
