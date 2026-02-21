@@ -26,6 +26,7 @@ uvicorn app.main:app --reload
 - `ANTHROPIC_VISION_MODEL` — отдельная модель для OCR/vision шага (опционально)
 - `ANTHROPIC_VISION_FALLBACK_MODEL` — fallback-модель для vision при `OverloadedError` (например, `claude-sonnet-4-6`). Если не задана и основная vision-модель содержит `opus`, сервис автоматически попробует `claude-sonnet-4-6`.
 - `ANTHROPIC_STRUCTURED_MODEL` — отдельная модель для structured шага (опционально)
+- `ANTHROPIC_STRUCTURED_FALLBACK_MODEL` — fallback-модель для structured fallback (`messages.create`) при сбое `structured.parse`. Если не задана и основная structured-модель содержит `opus`, сервис автоматически попробует `claude-sonnet-4-6`.
 - `MOCK_MODE=1` — выключает внешние вызовы и возвращает мок-ответ
 - `MAX_UPLOAD_MB` — лимит размера PDF (по умолчанию 15)
 - `PDF_MAX_PAGES` — число страниц PDF для обработки (по умолчанию 1)
@@ -47,10 +48,10 @@ gunicorn app.main:app -c gunicorn_conf.py
 Это гарантирует, что `logger.exception(...)` и stdout/stderr попадут в логи платформы (Render logs).
 
 - `ANTHROPIC_VISION_TIMEOUT_S` — таймаут vision-запроса в секундах (по умолчанию 90)
-- `ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S` — таймаут structured.parse в секундах (по умолчанию 15; быстрый оппортунистический parse, затем fallback)
+- `ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S` — таймаут structured.parse в секундах (по умолчанию 30; для Opus под нагрузкой)
 - `ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S` — таймаут structured fallback create в секундах (по умолчанию 90)
 
-- `ANTHROPIC_MAX_RETRIES` — количество SDK-ретраев. Рекомендуется `0` для прозрачной диагностики structured-ошибок.
+- `ANTHROPIC_MAX_RETRIES` — количество SDK-ретраев (по умолчанию 2). Рекомендуется `1-2` для устойчивости к 429/529.
 - `ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS` — ограничение размера draft_text перед structured-шагом (по умолчанию 12000).
 
 - `ANTHROPIC_HTTP_TIMEOUT_S` — явный HTTP timeout для Anthropic SDK (по умолчанию 60).
