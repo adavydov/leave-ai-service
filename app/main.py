@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .ai_extract import extract_leave_request_from_pdf_bytes
+from .ai_extract import UpstreamAIError, extract_leave_request_from_pdf_bytes
 from .schemas import ApiResponse
 from .validation import validate_extract
 
@@ -89,6 +89,8 @@ async def api_extract(file: UploadFile = File(...)):
         validation = validate_extract(extract)
         resp = ApiResponse(extract=extract, validation=validation)
         return resp.model_dump()
+    except UpstreamAIError as e:
+        raise HTTPException(status_code=e.status_code, detail=_sanitize_error_message(e))
     except Exception as e:
         status = 502 if _is_upstream_ai_error(e) else 500
         raise HTTPException(status_code=status, detail=_sanitize_upstream_error(e))
