@@ -44,6 +44,7 @@ btn.addEventListener('click', async () => {
         error: 'Ошибка при обработке PDF.',
         status: res.status,
         detail: obj?.detail || obj?.error || 'Неизвестная ошибка',
+        debug_steps: Array.isArray(obj?.debug_steps) ? obj.debug_steps : [],
       };
     }
 
