@@ -1,6 +1,8 @@
 const fileEl = document.getElementById('file');
 const btn = document.getElementById('upload');
 const dlBtn = document.getElementById('download');
+// legacy compatibility: older cached scripts may expect `outEl`
+const outEl = document.getElementById('out') || { textContent: '' };
 const statusEl = document.getElementById('status');
 const stepsEl = document.getElementById('steps');
 const resultBody = document.querySelector('#resultTable tbody');
@@ -108,33 +110,6 @@ function handleNdjsonLine(line, state) {
     state.finalPayload = evt;
     state.ok = false;
     setStatus(false, `НЕ ОК (${evt.status || 'error'})`);
-  }
-}
-
-function appendLine(line) {
-  outEl.textContent += (outEl.textContent ? '\n' : '') + line;
-}
-
-function handleNdjsonLine(line, state) {
-  const trimmed = line.trim();
-  if (!trimmed) return;
-
-  let evt;
-  try {
-    evt = JSON.parse(trimmed);
-  } catch {
-    appendLine('[stream] некорректная строка: ' + trimmed.slice(0, 160));
-    return;
-  }
-
-  if (evt.type === 'step') {
-    appendLine('• ' + evt.message);
-  } else if (evt.type === 'result') {
-    state.finalPayload = evt.payload;
-    appendLine(evt.ok ? '✅ Завершено успешно' : `❌ Ошибка (${evt.status})`);
-  } else if (evt.detail) {
-    state.finalPayload = evt;
-    appendLine('❌ Ошибка (' + (evt.status || 'unknown') + ')');
   }
 }
 

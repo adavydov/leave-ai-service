@@ -436,7 +436,7 @@ def extract_leave_request_with_debug(
     draft_max_tokens = _env_int_min("ANTHROPIC_DRAFT_MAX_TOKENS", 1024, 256)
     out_max_tokens = _env_int_min("ANTHROPIC_MAX_TOKENS", 1024, 512)
     vision_timeout_s = _env_int_min("ANTHROPIC_VISION_TIMEOUT_S", 90, 15)
-    structured_parse_timeout_s = _env_int_min("ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S", 70, 15)
+    structured_parse_timeout_s = _env_int_min("ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S", 15, 10)
     structured_fallback_timeout_s = _env_int_min("ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S", 90, 15)
     structured_draft_max_chars = _env_int_min("ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS", 12000, 2000)
 

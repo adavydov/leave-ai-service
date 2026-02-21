@@ -46,7 +46,7 @@ gunicorn app.main:app -c gunicorn_conf.py
 Это гарантирует, что `logger.exception(...)` и stdout/stderr попадут в логи платформы (Render logs).
 
 - `ANTHROPIC_VISION_TIMEOUT_S` — таймаут vision-запроса в секундах (по умолчанию 90)
-- `ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S` — таймаут structured.parse в секундах (по умолчанию 70)
+- `ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S` — таймаут structured.parse в секундах (по умолчанию 15; быстрый оппортунистический parse, затем fallback)
 - `ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S` — таймаут structured fallback create в секундах (по умолчанию 90)
 
 - `ANTHROPIC_MAX_RETRIES` — количество SDK-ретраев. Рекомендуется `0` для прозрачной диагностики structured-ошибок.
