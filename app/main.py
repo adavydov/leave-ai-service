@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .ai_extract import UpstreamAIError, extract_leave_request_with_debug
+from .compliance import run_compliance_checks
 from .schemas import ApiResponse
 from .validation import validate_extract
 
@@ -142,7 +143,13 @@ async def api_extract(file: UploadFile = File(...)):
     try:
         extract, debug_steps = await run_in_threadpool(extract_leave_request_with_debug, data, filename)
         validation = validate_extract(extract)
-        resp = ApiResponse(extract=extract, validation=validation).model_dump()
+        compliance, needs_rewrite = run_compliance_checks(extract)
+        resp = ApiResponse(
+            extract=extract,
+            validation=validation,
+            compliance=compliance,
+            needs_rewrite=needs_rewrite,
+        ).model_dump()
         resp["debug_steps"] = debug_steps
         return resp
     except Exception as e:
@@ -162,7 +169,13 @@ async def api_extract_stream(file: UploadFile = File(...)):
         try:
             extract, debug_steps = extract_leave_request_with_debug(data, filename, on_debug=_on_debug)
             validation = validate_extract(extract)
-            resp = ApiResponse(extract=extract, validation=validation).model_dump()
+            compliance, needs_rewrite = run_compliance_checks(extract)
+            resp = ApiResponse(
+                extract=extract,
+                validation=validation,
+                compliance=compliance,
+                needs_rewrite=needs_rewrite,
+            ).model_dump()
             resp["debug_steps"] = debug_steps
             events.put({"type": "result", "ok": True, "status": 200, "payload": resp})
         except Exception as e:

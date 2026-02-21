@@ -8,6 +8,8 @@ const stepsEl = document.getElementById('steps');
 const resultBody = document.querySelector('#resultTable tbody');
 const validationBody = document.querySelector('#validationTable tbody');
 const errorBox = document.getElementById('errorBox');
+const complianceSummaryEl = document.getElementById('complianceSummary');
+const complianceBody = document.querySelector('#complianceTable tbody');
 
 let lastPayload = null;
 
@@ -42,6 +44,9 @@ function clearUI() {
   validationBody.innerHTML = '';
   errorBox.hidden = true;
   errorBox.textContent = '';
+  complianceSummaryEl.textContent = 'Ожидание результата…';
+  complianceSummaryEl.className = 'small muted';
+  complianceBody.innerHTML = '';
   dlBtn.hidden = true;
   lastPayload = null;
   statusEl.className = 'status muted';
@@ -57,6 +62,39 @@ function row(key, val) {
   tr.appendChild(k);
   tr.appendChild(v);
   resultBody.appendChild(tr);
+}
+
+
+function renderCompliance(compliance, needsRewrite) {
+  complianceBody.innerHTML = '';
+  const items = Array.isArray(compliance) ? compliance : [];
+
+  if (!items.length) {
+    complianceSummaryEl.textContent = 'Ошибок не найдено';
+    complianceSummaryEl.className = 'small';
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="3">Ошибок не найдено</td>';
+    complianceBody.appendChild(tr);
+    return;
+  }
+
+  if (needsRewrite) {
+    complianceSummaryEl.textContent = 'Нужно исправить заявление';
+    complianceSummaryEl.className = 'small bad';
+  } else {
+    complianceSummaryEl.textContent = 'Критичных ошибок не найдено';
+    complianceSummaryEl.className = 'small ok';
+  }
+
+  const order = { error: 0, warn: 1, info: 2 };
+  items
+    .slice()
+    .sort((a, b) => (order[a.level] ?? 9) - (order[b.level] ?? 9))
+    .forEach((item) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${item.level || ''}</td><td>${item.message || ''}</td><td class="small">${item.field || '—'}</td>`;
+      complianceBody.appendChild(tr);
+    });
 }
 
 function renderValidation(validation) {
@@ -100,6 +138,7 @@ function renderPayload(payload) {
   row('Текст заявления (raw)', extract.raw_text);
 
   renderValidation(payload.validation);
+  renderCompliance(payload.compliance, payload.needs_rewrite);
 }
 
 function handleNdjsonLine(line, state) {

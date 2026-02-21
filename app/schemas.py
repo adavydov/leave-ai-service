@@ -101,6 +101,16 @@ class ValidationIssue(BaseModel):
     message: str
 
 
+class ComplianceIssue(BaseModel):
+    level: Literal["error", "warn", "info"] = "info"
+    code: str
+    field: Optional[str] = None
+    message: str
+    details: Optional[dict] = None
+
+
 class ApiResponse(BaseModel):
     extract: LeaveRequestExtract
     validation: List[ValidationIssue]
+    compliance: List[ComplianceIssue] = Field(default_factory=list)
+    needs_rewrite: bool = False
