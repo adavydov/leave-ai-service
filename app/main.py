@@ -27,9 +27,6 @@ settings = get_settings()
 logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger(__name__)
-
 app = FastAPI(title="Leave Request Parser (RU)")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
