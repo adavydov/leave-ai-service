@@ -53,3 +53,14 @@ gunicorn app.main:app -c gunicorn_conf.py
 - `ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS` — ограничение размера draft_text перед structured-шагом (по умолчанию 12000).
 
 - `ANTHROPIC_HTTP_TIMEOUT_S` — явный HTTP timeout для Anthropic SDK (по умолчанию 60).
+
+## GitHub Actions: авто-merge и деплой
+
+В репозитории добавлены workflow:
+- `.github/workflows/auto-merge.yml` — авто-approve и auto-merge PR от Codex-веток (`codex/*`).
+- `.github/workflows/deploy-on-main.yml` — запуск деплоя при `push` в `main/master`.
+
+Для деплоя через Render добавьте секрет репозитория:
+- `RENDER_DEPLOY_HOOK_URL` — Deploy Hook URL из Render сервиса.
+
+После этого каждый merge в `main` будет автоматически триггерить deploy.
