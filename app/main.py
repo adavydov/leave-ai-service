@@ -29,7 +29,7 @@ async def openai_health():
         r = client.responses.create(
             model=model,
             input="Say OK",
-            max_output_tokens=5
+            max_output_tokens=16
         )
         return {"status": "ok", "model": model}
     except Exception as e:
