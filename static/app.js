@@ -1,15 +1,13 @@
 const fileEl = document.getElementById('file');
 const btn = document.getElementById('upload');
 const dlBtn = document.getElementById('download');
-// legacy compatibility: older cached scripts may expect `outEl`
 const outEl = document.getElementById('out') || { textContent: '' };
 const statusEl = document.getElementById('status');
 const stepsEl = document.getElementById('steps');
 const resultBody = document.querySelector('#resultTable tbody');
-const validationBody = document.querySelector('#validationTable tbody');
 const errorBox = document.getElementById('errorBox');
-const complianceSummaryEl = document.getElementById('complianceSummary');
-const complianceBody = document.querySelector('#complianceTable tbody');
+const issuesSummaryEl = document.getElementById('issuesSummary');
+const issuesListEl = document.getElementById('issuesList');
 
 let lastPayload = null;
 
@@ -26,7 +24,6 @@ function humanLeaveType(v) {
   return m[v] || v || '—';
 }
 
-
 function setStatus(ok, text) {
   statusEl.className = `status ${ok ? 'ok' : 'bad'}`;
   statusEl.textContent = text;
@@ -41,12 +38,11 @@ function addStep(text) {
 function clearUI() {
   stepsEl.innerHTML = '';
   resultBody.innerHTML = '';
-  validationBody.innerHTML = '';
   errorBox.hidden = true;
   errorBox.textContent = '';
-  complianceSummaryEl.textContent = 'Ожидание результата…';
-  complianceSummaryEl.className = 'small muted';
-  complianceBody.innerHTML = '';
+  issuesSummaryEl.textContent = 'Ожидание результата…';
+  issuesSummaryEl.className = 'small muted';
+  issuesListEl.innerHTML = '';
   dlBtn.hidden = true;
   lastPayload = null;
   statusEl.className = 'status muted';
@@ -64,52 +60,38 @@ function row(key, val) {
   resultBody.appendChild(tr);
 }
 
+function renderIssues(issues) {
+  const items = Array.isArray(issues) ? issues.slice() : [];
+  const errors = items.filter((i) => i.severity === 'error');
+  const warnings = items.filter((i) => i.severity === 'warn');
 
-function renderCompliance(compliance, needsRewrite) {
-  complianceBody.innerHTML = '';
-  const items = Array.isArray(compliance) ? compliance : [];
-
-  if (!items.length) {
-    complianceSummaryEl.textContent = 'Ошибок не найдено';
-    complianceSummaryEl.className = 'small';
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="3">Ошибок не найдено</td>';
-    complianceBody.appendChild(tr);
+  if (!items.length || (!errors.length && !warnings.length)) {
+    issuesSummaryEl.textContent = 'Заявление корректно';
+    issuesSummaryEl.className = 'small ok';
+    issuesListEl.innerHTML = '<p class="small muted">Проблем не найдено.</p>';
     return;
   }
 
-  if (needsRewrite) {
-    complianceSummaryEl.textContent = 'Нужно исправить заявление';
-    complianceSummaryEl.className = 'small bad';
-  } else {
-    complianceSummaryEl.textContent = 'Критичных ошибок не найдено';
-    complianceSummaryEl.className = 'small ok';
-  }
+  issuesSummaryEl.textContent = `Найдено проблем: ${errors.length + warnings.length} (критичных: ${errors.length})`;
+  issuesSummaryEl.className = errors.length ? 'small bad' : 'small';
 
   const order = { error: 0, warn: 1, info: 2 };
   items
-    .slice()
-    .sort((a, b) => (order[a.level] ?? 9) - (order[b.level] ?? 9))
+    .filter((i) => i.severity !== 'info')
+    .sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9))
     .forEach((item) => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${item.level || ''}</td><td>${item.message || ''}</td><td class="small">${item.field || '—'}</td>`;
-      complianceBody.appendChild(tr);
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div><b>${item.message || '—'}</b></div>
+        <div class="small">Где: ${item.field || 'Общая проверка документа'}</div>
+        <details class="small">
+          <summary>Технические детали</summary>
+          domain: ${item.domain || '—'} | code: ${item.code || '—'} | source: ${item.source || '—'}
+        </details>
+      `;
+      issuesListEl.appendChild(card);
     });
-}
-
-function renderValidation(validation) {
-  validationBody.innerHTML = '';
-  if (!Array.isArray(validation) || validation.length === 0) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="3">Нет замечаний</td>';
-    validationBody.appendChild(tr);
-    return;
-  }
-  for (const item of validation) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${item.level || ''}</td><td>${item.code || ''}</td><td>${item.message || ''}</td>`;
-    validationBody.appendChild(tr);
-  }
 }
 
 function renderPayload(payload) {
@@ -123,7 +105,7 @@ function renderPayload(payload) {
     return;
   }
 
-  row('Статус', 'OK');
+  row('Статус обработки', 'Обработка завершена');
   row('Организация', extract.employer_name);
   row('Сотрудник', extract.employee?.full_name);
   row('Должность', extract.employee?.position);
@@ -134,11 +116,8 @@ function renderPayload(payload) {
   row('Окончание отпуска', extract.leave?.end_date);
   row('Дней', extract.leave?.days_count);
   row('Подпись', extract.signature_present ? 'Да' : (extract.signature_present === false ? 'Нет' : 'Неизвестно'));
-  row('Уверенность подписи', extract.signature_confidence);
-  row('Текст заявления (raw)', extract.raw_text);
 
-  renderValidation(payload.validation);
-  renderCompliance(payload.compliance, payload.needs_rewrite);
+  renderIssues(payload.issues);
 }
 
 function handleNdjsonLine(line, state) {
@@ -158,18 +137,18 @@ function handleNdjsonLine(line, state) {
   } else if (evt.type === 'result') {
     state.finalPayload = evt.payload;
     state.ok = Boolean(evt.ok);
-    setStatus(state.ok, state.ok ? 'OK' : `НЕ ОК (${evt.status || 'error'})`);
+    setStatus(state.ok, state.ok ? 'Обработка завершена' : `Ошибка обработки (${evt.status || 'error'})`);
   } else if (evt.detail) {
     state.finalPayload = evt;
     state.ok = false;
-    setStatus(false, `НЕ ОК (${evt.status || 'error'})`);
+    setStatus(false, `Ошибка обработки (${evt.status || 'error'})`);
   }
 }
 
 btn.addEventListener('click', async () => {
   const f = fileEl.files && fileEl.files[0];
   if (!f) {
-    setStatus(false, 'НЕ ОК');
+    setStatus(false, 'Файл не выбран');
     errorBox.hidden = false;
     errorBox.textContent = 'Ошибка: сначала выберите PDF файл.';
     return;
@@ -214,15 +193,14 @@ btn.addEventListener('click', async () => {
       if (!state.ok) {
         errorBox.hidden = false;
         errorBox.textContent = 'Ошибка обработки: ' + (state.finalPayload.detail || state.finalPayload.error || 'неизвестная причина');
-        row('Статус', 'НЕ ОК');
       }
     } else {
-      setStatus(false, 'НЕ ОК');
+      setStatus(false, 'НЕ получен финальный результат');
       errorBox.hidden = false;
       errorBox.textContent = 'Не получен финальный результат от сервера.';
     }
   } catch (e) {
-    setStatus(false, 'НЕ ОК');
+    setStatus(false, 'Ошибка запроса');
     errorBox.hidden = false;
     errorBox.textContent = e && e.name === 'AbortError'
       ? 'Запрос выполняется слишком долго (>300с).'

@@ -36,7 +36,7 @@
       <li>Нажмите на поле выбора файла и выберите PDF заявления.</li>
       <li>Нажмите <b>«Обработать»</b>.</li>
       <li>Смотрите блок <b>«Отладочные шаги»</b> — там видно, на каком этапе обработка.</li>
-      <li>Проверьте итог: <b>OK</b> или <b>НЕ ОК</b>.</li>
+      <li>Проверьте статус обработки и список проблем в заявлении.</li>
       <li>При необходимости скачайте сырой JSON кнопкой <b>«Скачать JSON»</b>.</li>
     </ol>
   </section>
@@ -64,25 +64,9 @@
   </section>
 
   <section class="card">
-    <h3>Проверки</h3>
-    <table id="validationTable">
-      <thead>
-        <tr><th>Уровень</th><th>Код</th><th>Сообщение</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </section>
-
-
-  <section class="card">
-    <h3>Проверка заявления</h3>
-    <div id="complianceSummary" class="small muted">Ожидание результата…</div>
-    <table id="complianceTable">
-      <thead>
-        <tr><th>Уровень</th><th>Сообщение</th><th>Поле</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+    <h3>Проблемы в заявлении</h3>
+    <div id="issuesSummary" class="small muted">Ожидание результата…</div>
+    <div id="issuesList"></div>
   </section>
 
   <script>window.outEl = document.getElementById('out') || window.outEl;</script>

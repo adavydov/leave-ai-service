@@ -19,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from .ai_extract import UpstreamAIError, extract_leave_request_with_debug
 from .compliance import run_compliance_checks
-from .issues import build_decision, build_trace, make_upstream_issue
+from .issues import build_decision, build_trace, from_compliance, from_validation, make_upstream_issue
 from .schemas import ApiResponse
 from .validation import validate_extract
 
@@ -244,10 +244,12 @@ async def api_extract(file: UploadFile = File(...)):
         extract, debug_steps = await run_in_threadpool(extract_leave_request_with_debug, data, filename)
         validation = validate_extract(extract)
         compliance, needs_rewrite = run_compliance_checks(extract)
+        issues = [*from_validation(validation), *from_compliance(compliance)]
         resp = ApiResponse(
             extract=extract,
-            validation=validation,
-            compliance=compliance,
+            issues=issues,
+            decision=build_decision(issues),
+            trace=build_trace("upload", {}, {}),
             needs_rewrite=needs_rewrite,
         ).model_dump()
         resp["debug_steps"] = debug_steps
@@ -281,10 +283,12 @@ async def api_extract_stream(file: UploadFile = File(...)):
             extract, debug_steps = extract_leave_request_with_debug(data, filename, on_debug=_on_debug)
             validation = validate_extract(extract)
             compliance, needs_rewrite = run_compliance_checks(extract)
+            issues = [*from_validation(validation), *from_compliance(compliance)]
             resp = ApiResponse(
                 extract=extract,
-                validation=validation,
-                compliance=compliance,
+                issues=issues,
+                decision=build_decision(issues),
+                trace=build_trace("upload", {}, {}),
                 needs_rewrite=needs_rewrite,
             ).model_dump()
             resp["debug_steps"] = debug_steps
