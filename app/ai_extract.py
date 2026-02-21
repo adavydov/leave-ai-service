@@ -7,6 +7,7 @@ import os
 import queue
 import re
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import anthropic
@@ -28,9 +29,15 @@ class UpstreamAIError(RuntimeError):
 logger = logging.getLogger(__name__)
 
 
+def _safe_log_debug_message(message: str) -> str:
+    msg = re.sub(r"name=[^,]+", "name=<masked>", message)
+    msg = re.sub(r'full_name[\'"]?:\s*[^,}]+', "full_name:<masked>", msg, flags=re.IGNORECASE)
+    return msg
+
+
 def _add_debug(debug_steps: List[str], message: str, on_debug: Optional[Callable[[str], None]] = None) -> None:
     debug_steps.append(message)
-    logger.info("[extract] %s", message)
+    logger.info("[extract] %s", _safe_log_debug_message(message))
     if on_debug:
         on_debug(message)
 
@@ -598,3 +605,25 @@ def extract_leave_request_from_pdf_bytes(
 ) -> LeaveRequestExtract:
     parsed, _ = extract_leave_request_with_debug(pdf_bytes, filename, model=model)
     return parsed
+
+
+def _trace_from_debug(debug_steps: List[str], total_ms: int) -> dict[str, Any]:
+    upstream_request_ids: dict[str, str] = {}
+    for line in debug_steps:
+        m = re.search(r"Шаг ([^:]+): request_id=([A-Za-z0-9_\-]+)", line)
+        if m:
+            upstream_request_ids[m.group(1)] = m.group(2)
+    timings_ms = {"total_ms": int(total_ms)}
+    return {"upstream_request_ids": upstream_request_ids, "timings_ms": timings_ms}
+
+
+def extract_leave_request_with_meta(
+    pdf_bytes: bytes,
+    filename: str,
+    model: Optional[str] = None,
+    on_debug: Optional[Callable[[str], None]] = None,
+) -> tuple[LeaveRequestExtract, List[str], dict[str, Any]]:
+    started = time.perf_counter()
+    parsed, debug_steps = extract_leave_request_with_debug(pdf_bytes, filename, model=model, on_debug=on_debug)
+    total_ms = int((time.perf_counter() - started) * 1000)
+    return parsed, debug_steps, _trace_from_debug(debug_steps, total_ms)

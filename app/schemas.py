@@ -4,6 +4,23 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Literal
 
 
+
+
+IssueSeverity = Literal["error", "warn", "info"]
+IssueDomain = Literal["extraction", "compliance", "system", "upstream"]
+IssueCategory = Literal[
+    "document",
+    "dates",
+    "counts",
+    "signature",
+    "law_hints",
+    "quality",
+    "timeouts",
+    "network",
+    "validation",
+    "unknown",
+]
+
 LeaveType = Literal[
     "annual_paid",   # ежегодный оплачиваемый
     "unpaid",        # без сохранения
@@ -109,8 +126,35 @@ class ComplianceIssue(BaseModel):
     details: Optional[dict] = None
 
 
+class Issue(BaseModel):
+    severity: IssueSeverity = "info"
+    domain: IssueDomain = "system"
+    category: IssueCategory = "unknown"
+    code: str
+    field: Optional[str] = None
+    message: str
+    hint: Optional[str] = None
+    details: Optional[dict] = None
+    source: Optional[str] = None
+
+
+class Decision(BaseModel):
+    status: Literal["ok", "warn", "error"] = "ok"
+    needs_rewrite: bool = False
+    summary: str = "Замечаний не обнаружено."
+
+
+class Trace(BaseModel):
+    request_id: str
+    upstream_request_ids: dict[str, str] = Field(default_factory=dict)
+    timings_ms: dict[str, int] = Field(default_factory=dict)
+
+
 class ApiResponse(BaseModel):
     extract: LeaveRequestExtract
     validation: List[ValidationIssue]
     compliance: List[ComplianceIssue] = Field(default_factory=list)
     needs_rewrite: bool = False
+    issues: List[Issue] = Field(default_factory=list)
+    decision: Decision = Field(default_factory=Decision)
+    trace: Optional[Trace] = None
