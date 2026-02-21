@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import anthropic
 from anthropic import Anthropic
@@ -89,7 +90,40 @@ async def api_extract(file: UploadFile = File(...)):
         resp = ApiResponse(extract=extract, validation=validation)
         return resp.model_dump()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка обработки: {type(e).__name__}: {e}")
+        status = 502 if _is_upstream_ai_error(e) else 500
+        raise HTTPException(status_code=status, detail=_sanitize_upstream_error(e))
+
+
+def _is_upstream_ai_error(err: Exception) -> bool:
+    message = str(err or "").lower()
+    markers = (
+        "anthropic",
+        "structured step failed",
+        "vision step failed",
+        "api_error",
+        "internal server error",
+        "gateway",
+        "bad gateway",
+        "upstream",
+    )
+    return isinstance(err, anthropic.APIError) or any(marker in message for marker in markers)
+
+
+def _sanitize_upstream_error(err: Exception) -> str:
+    """Убираем HTML/технические детали и отдаём безопасный текст ошибки."""
+    message = str(err or "").strip()
+    if not message:
+        return f"Ошибка обработки: {type(err).__name__}"
+
+    message = re.sub(r"render_info\s*=\s*\{.*", "", message, flags=re.IGNORECASE)
+    message = re.sub(r'request_id[\'"]?\s*[:=]\s*[\'"][^\'"]+[\'"]', "", message, flags=re.IGNORECASE)
+    message = re.sub(r"<[^>]+>", " ", message)
+    message = re.sub(r"\s+", " ", message).strip(" .,:;-")
+
+    if _is_upstream_ai_error(err):
+        return "Ошибка внешнего AI-сервиса. Повторите попытку позже."
+
+    return f"Ошибка обработки: {type(err).__name__}: {message[:220]}"
 
 @app.get("/api/version")
 async def api_version():
