@@ -10,9 +10,9 @@ jobs:
       github.event.pull_request.draft == false &&
       (
         github.event.pull_request.user.login == 'codex' ||
-        github.event.pull_request.user.login == 'openai-codex' ||
-        startsWith(github.event.pull_request.head.ref, 'codex/')
-      )
+        github.event.pull_request.user.login == 'openai-codex'
+      ) &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -24,8 +24,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr review --approve "$PR_URL" || true
 
-      - name: Enable auto-merge (squash)
+      - name: Merge PR (auto if supported, otherwise squash now)
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          set -euo pipefail
+          if gh pr merge --auto --squash "$PR_URL"; then
+            echo "Auto-merge enabled"
+          else
+            echo "Auto-merge is unavailable (likely no protected branch rules); performing squash merge now"
+            gh pr merge --squash --delete-branch "$PR_URL"
+          fi

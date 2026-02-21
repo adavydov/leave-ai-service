@@ -92,7 +92,12 @@ def make_upstream_issue(*, code: str, message: str, source: Optional[str] = None
 
 
 def build_decision(issues: list[Issue]) -> Decision:
-    severe_error = any(i.severity == 'error' and i.domain in {'extraction', 'compliance', 'system'} and i.category != 'quality' for i in issues)
+    severe_error = any(
+        i.severity == 'error'
+        and i.domain in {'extraction', 'compliance', 'system', 'upstream'}
+        and i.category != 'quality'
+        for i in issues
+    )
     warn_exists = any(i.severity == 'warn' for i in issues)
     if severe_error:
         return Decision(status='error', needs_rewrite=True, summary='Найдены критичные проблемы: заявление нужно исправить.')

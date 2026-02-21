@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.issues import build_decision, build_trace, from_compliance, from_validation
-from app.schemas import ComplianceIssue, ValidationIssue
+from app.schemas import ComplianceIssue, Issue, ValidationIssue
 
 
 def test_contract_issue_and_decision_and_trace():
@@ -19,3 +19,18 @@ def test_contract_issue_and_decision_and_trace():
     assert decision.status == 'error'
     assert decision.needs_rewrite is True
     assert trace.request_id == 'req-1'
+
+
+def test_decision_marks_upstream_errors_as_error():
+    issues = [
+        Issue(
+            severity='error',
+            domain='upstream',
+            category='network',
+            code='anthropic_timeout',
+            message='timeout',
+        )
+    ]
+    decision = build_decision(issues)
+    assert decision.status == 'error'
+    assert decision.needs_rewrite is True

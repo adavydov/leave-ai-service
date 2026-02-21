@@ -74,8 +74,17 @@ def _env_str(name: str, default: str) -> str:
     return default if v is None or v.strip() == "" else v.strip()
 
 
-def _env_int_min(name: str, default: int, minimum: int) -> int:
-    return max(minimum, _env_int(name, default))
+def _max_image_b64_chars_limit(default: int = 4_000_000) -> int:
+    """Return base64 payload limit with backward-compatible env alias support."""
+    canonical = os.getenv("MAX_IMAGE_B64_CHARS")
+    legacy = os.getenv("PDF_MAX_B64_BYTES")
+    raw = canonical if canonical not in (None, "") else legacy
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def _pix_to_png_bytes(pix) -> bytes:
@@ -326,7 +335,7 @@ def _render_pdf_to_image_blocks(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     max_pages = _env_int_min("PDF_MAX_PAGES", 1, 1)
     target_long_edge = _env_int_min("PDF_TARGET_LONG_EDGE", 1568, 512)
-    max_b64_bytes = _env_int("PDF_MAX_B64_BYTES", 30 * 1024 * 1024)
+    max_b64_bytes = _max_image_b64_chars_limit()
     color_mode = _env_str("PDF_COLOR_MODE", "gray").lower()
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")

@@ -57,7 +57,7 @@ gunicorn app.main:app -c gunicorn_conf.py
 ## GitHub Actions: авто-merge и деплой
 
 В репозитории добавлены workflow:
-- `.github/workflows/auto-merge.yml` — авто-approve и auto-merge PR от Codex-веток (`codex/*`).
+- `.github/workflows/auto-merge.yml` — авто-approve и merge PR только от доверенных Codex-ботов в этом же репозитории (с fallback на обычный squash merge, если auto-merge недоступен).
 - `.github/workflows/deploy-on-main.yml` — запуск деплоя при `push` в `main/master`.
 
 Для деплоя через Render добавьте секрет репозитория:
@@ -81,7 +81,7 @@ Backward-compatible fields remain available: `extract`, `validation`, `debug_ste
 - `ANTHROPIC_API_KEY`
 - `ANTHROPIC_VISION_MODEL`, `ANTHROPIC_STRUCTURED_MODEL`
 - `ANTHROPIC_HTTP_TIMEOUT_S`, `ANTHROPIC_VISION_TIMEOUT_S`, `ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S`, `ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S`
-- `MAX_UPLOAD_MB`, `PDF_MAX_PAGES`, `MAX_IMAGE_B64_CHARS`, `ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS`
+- `MAX_UPLOAD_MB`, `PDF_MAX_PAGES`, `MAX_IMAGE_B64_CHARS` (legacy alias: `PDF_MAX_B64_BYTES`), `ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS`
 
 Use `trace.request_id` when searching logs in Render.
 
