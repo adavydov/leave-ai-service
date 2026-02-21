@@ -35,10 +35,21 @@ def _add_debug(debug_steps: List[str], message: str, on_debug: Optional[Callable
         on_debug(message)
 
 
+
+
+def _is_overloaded_error(err: Exception) -> bool:
+    status_code = int(getattr(err, "status_code", 0) or 0)
+    if status_code == 529:
+        return True
+    err_name = type(err).__name__.lower()
+    text = str(err or "").lower()
+    return "overload" in err_name or "overload" in text
 def _safe_anthropic_error_message(err: Exception) -> str:
     text = str(err or "").lower()
     status_code = int(getattr(err, "status_code", 502) or 502)
 
+    if _is_overloaded_error(err):
+        return "AI-сервис перегружен (upstream overloaded). Повторите попытку через 15–60 секунд."
     if status_code == 429:
         return "AI-сервис временно перегружен (rate limit). Повторите попытку через минуту."
     if status_code in (400, 413, 422):
@@ -148,8 +159,11 @@ def _parse_prompt_ru_json_only(draft_text: str) -> str:
         "Критично: поле leave.leave_type верни только одним из canonical значений: "
         "annual_paid | unpaid | study | maternity | childcare | other | unknown.\n"
         "Если поле не подтверждается текстом — null.\n"
-        "Структура: schema_version, employer_name, employee, manager, request_date, leave, "
-        "signature_present, signature_confidence, raw_text, quality.\n\n"
+        "Структура верхнего уровня: schema_version, employer_name, employee, manager, request_date, leave, "
+        "signature_present, signature_confidence, raw_text, quality.\n"
+        "Структура leave: leave_type, start_date, end_date, days_count, comment, reason_text, "
+        "is_part_of_annual_leave, schedule_reference.\n"
+        "Все даты строго YYYY-MM-DD.\n\n"
         "РАСПОЗНАННЫЙ ТЕКСТ:\n"
         f"{draft_text}\n"
     )
@@ -418,6 +432,8 @@ def _render_pdf_to_image_blocks(
 
 def _raise_upstream(step: str, err: Exception, debug_steps: List[str]):
     status = int(getattr(err, "status_code", 502) or 502)
+    if _is_overloaded_error(err):
+        status = 503
     raise UpstreamAIError(
         step=step,
         status_code=status if status >= 400 else 502,

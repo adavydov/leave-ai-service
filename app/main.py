@@ -37,6 +37,24 @@ MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "15"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 
+def _normalize_upstream_http_status(status_code: int) -> int:
+    """Normalize non-standard upstream statuses to public HTTP statuses for clients/UI."""
+    status = int(status_code or 0)
+    if status == 529:
+        return 503
+    if status >= 400:
+        return status
+    return 502
+
+
+def _extract_upstream_request_id(debug_steps: list[str] | None) -> str | None:
+    for step in reversed(debug_steps or []):
+        m = re.search(r"(?:error_)?request_id=([A-Za-z0-9_\-]+)", step)
+        if m:
+            return m.group(1)
+    return None
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     resp = templates.TemplateResponse(
@@ -187,13 +205,18 @@ def _http_error_to_issue_and_status(err: HTTPException) -> tuple[int, Any]:
 def _build_error_payload(err: Exception, where: str) -> tuple[int, dict[str, Any]]:
     if isinstance(err, UpstreamAIError):
         logger.exception("UpstreamAIError in %s (step=%s, status=%s)", where, getattr(err, "step", "unknown"), err.status_code)
-        status = err.status_code
-        return status, {
+        debug_steps = getattr(err, "debug_steps", [])
+        status = _normalize_upstream_http_status(err.status_code)
+        payload = {
             "error": "Ошибка при обработке PDF.",
             "status": status,
             "detail": _sanitize_error_message(err),
-            "debug_steps": getattr(err, "debug_steps", []),
+            "debug_steps": debug_steps,
         }
+        upstream_request_id = _extract_upstream_request_id(debug_steps)
+        if upstream_request_id:
+            payload["upstream_request_id"] = upstream_request_id
+        return status, payload
 
     if isinstance(err, anthropic.APIError):
         logger.exception("Anthropic APIError in %s", where)
