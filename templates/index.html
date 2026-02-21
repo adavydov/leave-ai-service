@@ -3,26 +3,58 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Leave AI Service (MVP)</title>
+  <title>Leave AI Service</title>
   <style>
-    body { font-family: system-ui, Arial, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, Arial, sans-serif; max-width: 1080px; margin: 24px auto; padding: 0 16px; }
     .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .card { border: 1px solid #c9c9c9; border-radius: 10px; padding: 12px; margin-top: 14px; }
     button { padding: 8px 12px; cursor: pointer; }
-    pre { background: #111; color: #eee; padding: 12px; border-radius: 8px; overflow: auto; }
-    .hint { color: #555; }
+    .hint { color: #666; }
+    .status { display: inline-block; padding: 4px 10px; border-radius: 999px; font-weight: 700; }
+    .ok { background: #d9f7e8; color: #0f6b3d; }
+    .bad { background: #fde2e2; color: #8f1f1f; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #d8d8d8; vertical-align: top; }
+    ul { margin: 8px 0 0 20px; padding: 0; }
+    .muted { color: #777; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
   </style>
 </head>
 <body>
-  <h1>Leave AI Service (MVP)</h1>
-  <p class="hint">Пока что это проверка инфраструктуры: загрузили PDF → получили JSON. Потом добавим ИИ и проверки по ТК.</p>
+  <h1>Leave AI Service</h1>
+  <p class="hint">Загрузите PDF заявления. Ниже увидите пошаговую трассировку, статус и извлечённые данные в читабельном виде.</p>
 
-  <div class="row">
+  <div class="row card">
     <input type="file" id="file" accept="application/pdf" />
-    <button id="upload">Загрузить</button>
+    <button id="upload">Обработать</button>
+    <button id="download" hidden>Скачать JSON</button>
+    <span id="status" class="status muted">Ожидание</span>
   </div>
 
-  <h3>Ответ</h3>
-  <pre id="out">{}</pre>
+  <section class="card">
+    <h3>Отладочные шаги</h3>
+    <ul id="steps"></ul>
+    <pre id="out" hidden></pre>
+  </section>
+
+  <section class="card">
+    <h3>Результат</h3>
+    <div id="errorBox" class="mono" hidden></div>
+    <table id="resultTable">
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h3>Проверки</h3>
+    <table id="validationTable">
+      <thead>
+        <tr><th>Уровень</th><th>Код</th><th>Сообщение</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
 
   <script src="/static/app.js"></script>
 </body>

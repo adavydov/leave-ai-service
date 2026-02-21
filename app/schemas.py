@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Literal
 
 
@@ -34,9 +34,47 @@ class LeaveInfo(BaseModel):
     days_count: Optional[int] = Field(None, description="Количество календарных дней")
     comment: Optional[str] = Field(None, description="Примечание/основание/период и т.п.")
 
+    @field_validator("leave_type", mode="before")
+    @classmethod
+    def _normalize_leave_type(cls, value):
+        if value is None:
+            return "unknown"
+        v = str(value).strip().lower()
+        aliases = {
+            "annual_paid": "annual_paid",
+            "ежегодный оплачиваемый отпуск": "annual_paid",
+            "ежегодный оплачиваемый": "annual_paid",
+            "оплачиваемый отпуск": "annual_paid",
+            "unpaid": "unpaid",
+            "без сохранения": "unpaid",
+            "без сохранения заработной платы": "unpaid",
+            "study": "study",
+            "учебный": "study",
+            "maternity": "maternity",
+            "беременности и родам": "maternity",
+            "childcare": "childcare",
+            "по уходу за ребенком": "childcare",
+            "по уходу за ребёнком": "childcare",
+            "other": "other",
+            "unknown": "unknown",
+        }
+        if v in aliases:
+            return aliases[v]
+        if "оплач" in v and "отпуск" in v:
+            return "annual_paid"
+        if "без сохран" in v:
+            return "unpaid"
+        if "учеб" in v:
+            return "study"
+        if "беремен" in v or "родам" in v:
+            return "maternity"
+        if "уход" in v and ("ребен" in v or "ребён" in v):
+            return "childcare"
+        return "unknown"
+
 
 class Quality(BaseModel):
-    overall_confidence: float = Field(0.0, ge=0, le=1, description="Уверенность 0..1")
+    overall_confidence: Optional[float] = Field(None, ge=0, le=1, description="Уверенность 0..1")
     missing_fields: List[str] = Field(default_factory=list, description="Каких важных полей не хватает")
     notes: List[str] = Field(default_factory=list, description="Короткие замечания")
 
