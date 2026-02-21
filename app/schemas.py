@@ -74,7 +74,7 @@ class LeaveInfo(BaseModel):
 
 
 class Quality(BaseModel):
-    overall_confidence: float = Field(0.0, ge=0, le=1, description="Уверенность 0..1")
+    overall_confidence: Optional[float] = Field(None, ge=0, le=1, description="Уверенность 0..1")
     missing_fields: List[str] = Field(default_factory=list, description="Каких важных полей не хватает")
     notes: List[str] = Field(default_factory=list, description="Короткие замечания")
 

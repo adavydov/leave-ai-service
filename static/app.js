@@ -1,6 +1,115 @@
 const fileEl = document.getElementById('file');
-const outEl = document.getElementById('out');
 const btn = document.getElementById('upload');
+const dlBtn = document.getElementById('download');
+const statusEl = document.getElementById('status');
+const stepsEl = document.getElementById('steps');
+const resultBody = document.querySelector('#resultTable tbody');
+const validationBody = document.querySelector('#validationTable tbody');
+const errorBox = document.getElementById('errorBox');
+
+let lastPayload = null;
+
+function setStatus(ok, text) {
+  statusEl.className = `status ${ok ? 'ok' : 'bad'}`;
+  statusEl.textContent = text;
+}
+
+function addStep(text) {
+  const li = document.createElement('li');
+  li.textContent = text;
+  stepsEl.appendChild(li);
+}
+
+function clearUI() {
+  stepsEl.innerHTML = '';
+  resultBody.innerHTML = '';
+  validationBody.innerHTML = '';
+  errorBox.hidden = true;
+  errorBox.textContent = '';
+  dlBtn.hidden = true;
+  lastPayload = null;
+  statusEl.className = 'status muted';
+  statusEl.textContent = 'В обработке...';
+}
+
+function row(key, val) {
+  const tr = document.createElement('tr');
+  const k = document.createElement('th');
+  const v = document.createElement('td');
+  k.textContent = key;
+  v.textContent = val == null ? '—' : String(val);
+  tr.appendChild(k);
+  tr.appendChild(v);
+  resultBody.appendChild(tr);
+}
+
+function renderValidation(validation) {
+  validationBody.innerHTML = '';
+  if (!Array.isArray(validation) || validation.length === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="3">Нет замечаний</td>';
+    validationBody.appendChild(tr);
+    return;
+  }
+  for (const item of validation) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${item.level || ''}</td><td>${item.code || ''}</td><td>${item.message || ''}</td>`;
+    validationBody.appendChild(tr);
+  }
+}
+
+function renderPayload(payload) {
+  lastPayload = payload;
+  dlBtn.hidden = false;
+
+  const extract = payload?.extract;
+  if (!extract) {
+    errorBox.hidden = false;
+    errorBox.textContent = payload?.detail || payload?.error || 'Неизвестная ошибка';
+    return;
+  }
+
+  row('Статус', 'OK');
+  row('Организация', extract.employer_name);
+  row('Сотрудник', extract.employee?.full_name);
+  row('Должность', extract.employee?.position);
+  row('Руководитель', extract.manager?.full_name);
+  row('Дата заявления', extract.request_date);
+  row('Тип отпуска', extract.leave?.leave_type);
+  row('Начало отпуска', extract.leave?.start_date);
+  row('Окончание отпуска', extract.leave?.end_date);
+  row('Дней', extract.leave?.days_count);
+  row('Подпись', extract.signature_present ? 'Да' : (extract.signature_present === false ? 'Нет' : 'Неизвестно'));
+  row('Уверенность подписи', extract.signature_confidence);
+  row('Raw text', extract.raw_text);
+
+  renderValidation(payload.validation);
+}
+
+function handleNdjsonLine(line, state) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+
+  let evt;
+  try {
+    evt = JSON.parse(trimmed);
+  } catch {
+    addStep('[stream] Некорректная строка: ' + trimmed.slice(0, 160));
+    return;
+  }
+
+  if (evt.type === 'step') {
+    addStep(evt.message || '');
+  } else if (evt.type === 'result') {
+    state.finalPayload = evt.payload;
+    state.ok = Boolean(evt.ok);
+    setStatus(state.ok, state.ok ? 'OK' : `НЕ ОК (${evt.status || 'error'})`);
+  } else if (evt.detail) {
+    state.finalPayload = evt;
+    state.ok = false;
+    setStatus(false, `НЕ ОК (${evt.status || 'error'})`);
+  }
+}
 
 function appendLine(line) {
   outEl.textContent += (outEl.textContent ? '\n' : '') + line;
@@ -32,11 +141,11 @@ function handleNdjsonLine(line, state) {
 btn.addEventListener('click', async () => {
   const f = fileEl.files && fileEl.files[0];
   if (!f) {
-    outEl.textContent = 'Выберите PDF файл.';
+    alert('Выберите PDF файл.');
     return;
   }
 
-  outEl.textContent = 'Старт обработки...';
+  clearUI();
 
   const fd = new FormData();
   fd.append('file', f);
@@ -55,7 +164,7 @@ btn.addEventListener('click', async () => {
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
-    const state = { finalPayload: null };
+    const state = { finalPayload: null, ok: false };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -63,29 +172,45 @@ btn.addEventListener('click', async () => {
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
-        for (const line of lines) {
-          handleNdjsonLine(line, state);
-        }
+        for (const line of lines) handleNdjsonLine(line, state);
       }
       if (done) break;
     }
 
-    if (buffer.trim()) {
-      handleNdjsonLine(buffer, state);
-    }
+    if (buffer.trim()) handleNdjsonLine(buffer, state);
 
     if (state.finalPayload) {
-      appendLine('');
-      appendLine(JSON.stringify(state.finalPayload, null, 2));
+      renderPayload(state.finalPayload);
+      if (!state.ok) {
+        errorBox.hidden = false;
+        errorBox.textContent = state.finalPayload.detail || state.finalPayload.error || 'Ошибка обработки';
+        row('Статус', 'НЕ ОК');
+      }
     } else {
-      appendLine('❌ Не получен финальный результат от сервера.');
+      setStatus(false, 'НЕ ОК');
+      errorBox.hidden = false;
+      errorBox.textContent = 'Не получен финальный результат от сервера.';
     }
   } catch (e) {
-    const msg = e && e.name === 'AbortError'
-      ? '❌ Запрос выполняется слишком долго (>300с). Скопируйте шаги выше и проверьте Render logs.'
-      : '❌ Ошибка запроса: ' + (e && e.message ? e.message : String(e));
-    appendLine(msg);
+    setStatus(false, 'НЕ ОК');
+    errorBox.hidden = false;
+    errorBox.textContent = e && e.name === 'AbortError'
+      ? 'Запрос выполняется слишком долго (>300с).'
+      : 'Ошибка запроса: ' + (e && e.message ? e.message : String(e));
   } finally {
     clearTimeout(timeoutId);
   }
+});
+
+dlBtn.addEventListener('click', () => {
+  if (!lastPayload) return;
+  const blob = new Blob([JSON.stringify(lastPayload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'leave-extract-result.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 });

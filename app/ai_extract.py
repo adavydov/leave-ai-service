@@ -284,6 +284,24 @@ def _create_anthropic_client(api_key: str, max_retries: int, http_timeout_s: int
         return Anthropic(api_key=api_key, max_retries=max_retries)
 
 
+def _client_with_timeout(client: Anthropic, timeout_s: int):
+    timeout_s = max(5, int(timeout_s))
+    with_options = getattr(client, "with_options", None)
+    if callable(with_options):
+        try:
+            return with_options(timeout=timeout_s)
+        except TypeError:
+            return client
+    return client
+
+
+def _request_id_of(obj: Any) -> Optional[str]:
+    rid = getattr(obj, "_request_id", None) or getattr(obj, "request_id", None)
+    if rid:
+        return str(rid)
+    return None
+
+
 def _raise_timeout(step: str, err: TimeoutError, debug_steps: List[str]):
     raise UpstreamAIError(
         step=step,
@@ -458,7 +476,8 @@ def extract_leave_request_with_debug(
         _add_debug(debug_steps, "Шаг vision: отправка PNG в Anthropic", on_debug)
 
         def _vision_call():
-            return client.messages.create(
+            scoped = _client_with_timeout(client, vision_timeout_s + 5)
+            return scoped.messages.create(
                 model=vision_model,
                 max_tokens=draft_max_tokens,
                 temperature=0,
@@ -469,11 +488,17 @@ def extract_leave_request_with_debug(
         draft_msg = _run_with_timeout(_vision_call, vision_timeout_s, "vision")
         draft_text = _extract_text_from_msg(draft_msg)
         _add_debug(debug_steps, f"Шаг vision: ответ получен, chars={len(draft_text)}", on_debug)
+        rid = _request_id_of(draft_msg)
+        if rid:
+            _add_debug(debug_steps, f"Шаг vision: request_id={rid}", on_debug)
     except TimeoutError as e:
         _add_debug(debug_steps, "Шаг vision: timeout", on_debug)
         _raise_timeout("vision", e, debug_steps)
     except anthropic.APIError as e:
         _add_debug(debug_steps, f"Шаг vision: ошибка API: {type(e).__name__}", on_debug)
+        rid = _request_id_of(e)
+        if rid:
+            _add_debug(debug_steps, f"Шаг vision: error_request_id={rid}", on_debug)
         _raise_upstream("vision", e, debug_steps)
 
     if not draft_text:
@@ -489,7 +514,8 @@ def extract_leave_request_with_debug(
         _add_debug(debug_steps, "Шаг structured.parse: отправка draft на структуризацию", on_debug)
 
         def _structured_parse_call():
-            return client.messages.parse(
+            scoped = _client_with_timeout(client, structured_parse_timeout_s + 5)
+            return scoped.messages.parse(
                 model=structured_model,
                 max_tokens=out_max_tokens,
                 temperature=0,
@@ -502,9 +528,13 @@ def extract_leave_request_with_debug(
         _add_debug(debug_steps, "Шаг structured.parse: успешно", on_debug)
     except Exception as e:
         _add_debug(debug_steps, f"Шаг structured.parse: ошибка {type(e).__name__}: {_short_error(e)}; пробуем fallback через messages.create", on_debug)
+        rid = _request_id_of(e)
+        if rid:
+            _add_debug(debug_steps, f"Шаг structured.parse: error_request_id={rid}", on_debug)
         try:
             def _structured_fallback_call():
-                return client.messages.create(
+                scoped = _client_with_timeout(client, structured_fallback_timeout_s + 5)
+                return scoped.messages.create(
                     model=structured_model,
                     max_tokens=out_max_tokens,
                     temperature=0,
@@ -515,6 +545,9 @@ def extract_leave_request_with_debug(
             raw_msg = _run_with_timeout(_structured_fallback_call, structured_fallback_timeout_s, "structured.fallback.create")
             raw_text = _extract_text_from_msg(raw_msg)
             _add_debug(debug_steps, f"Шаг structured.fallback.create: ответ chars={len(raw_text)}", on_debug)
+            rid = _request_id_of(raw_msg)
+            if rid:
+                _add_debug(debug_steps, f"Шаг structured.fallback.create: request_id={rid}", on_debug)
             raw_json = _extract_first_json_object(raw_text)
             normalized_json = _normalize_fallback_payload(raw_json, debug_steps, on_debug)
             parsed = LeaveRequestExtract.model_validate(normalized_json)
@@ -522,6 +555,9 @@ def extract_leave_request_with_debug(
             _add_debug(debug_steps, "Шаг structured.fallback.validate: JSON валиден", on_debug)
         except Exception as fallback_err:
             _add_debug(debug_steps, f"Шаг structured.fallback: ошибка {type(fallback_err).__name__}: {_short_error(fallback_err)}", on_debug)
+            rid = _request_id_of(fallback_err)
+            if rid:
+                _add_debug(debug_steps, f"Шаг structured.fallback: error_request_id={rid}", on_debug)
             if isinstance(fallback_err, ValidationError):
                 raise UpstreamAIError(
                     step="structured",
