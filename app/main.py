@@ -90,3 +90,14 @@ async def api_extract(file: UploadFile = File(...)):
         return resp.model_dump()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка обработки: {type(e).__name__}: {e}")
+
+@app.get("/api/version")
+async def api_version():
+    import os
+    return {
+        "RENDER_GIT_COMMIT": os.getenv("RENDER_GIT_COMMIT"),
+        "RENDER_GIT_BRANCH": os.getenv("RENDER_GIT_BRANCH"),
+        "RENDER_GIT_REPO_SLUG": os.getenv("RENDER_GIT_REPO_SLUG"),
+        "ANTHROPIC_MODEL": os.getenv("ANTHROPIC_MODEL"),
+        "MOCK_MODE": os.getenv("MOCK_MODE"),
+    }
