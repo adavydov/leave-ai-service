@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import anthropic
 from anthropic import Anthropic
@@ -11,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .ai_extract import extract_leave_request_from_pdf_bytes
+from .ai_extract import UpstreamAIError, extract_leave_request_from_pdf_bytes
 from .schemas import ApiResponse
 from .validation import validate_extract
 
@@ -88,8 +89,51 @@ async def api_extract(file: UploadFile = File(...)):
         validation = validate_extract(extract)
         resp = ApiResponse(extract=extract, validation=validation)
         return resp.model_dump()
+    except UpstreamAIError as e:
+        raise HTTPException(status_code=e.status_code, detail=_sanitize_error_message(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка обработки: {type(e).__name__}: {e}")
+        if _looks_like_upstream_ai_error(e):
+            raise HTTPException(status_code=502, detail="AI-сервис временно недоступен. Повторите попытку позже.")
+        raise HTTPException(status_code=500, detail=_sanitize_error_message(e))
+
+
+def _iter_exception_chain(err: Exception):
+    seen = set()
+    cur = err
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        yield cur
+        cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+
+
+def _looks_like_upstream_ai_error(err: Exception) -> bool:
+    markers = (
+        "anthropic",
+        "internal server error",
+        "api_error",
+        "bad gateway",
+        "gateway",
+        "overloaded",
+        "rate limit",
+        "upstream",
+    )
+    for exc in _iter_exception_chain(err):
+        if isinstance(exc, (UpstreamAIError, anthropic.APIError)):
+            return True
+        text = str(exc or "").lower()
+        if any(marker in text for marker in markers):
+            return True
+    return False
+
+
+def _sanitize_error_message(err: Exception) -> str:
+    message = re.sub(r"<[^>]+>", " ", str(err or "")).strip()
+    message = re.sub(r"\s+", " ", message).strip(" .,:;-")
+    if not message:
+        return f"Ошибка обработки: {type(err).__name__}"
+    if message.lower() == "internal server error":
+        return "Ошибка обработки документа. Повторите попытку позже."
+    return message[:220]
 
 @app.get("/api/version")
 async def api_version():
