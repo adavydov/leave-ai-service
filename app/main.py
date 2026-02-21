@@ -43,14 +43,13 @@ async def api_health():
 
 def _anthropic_probe() -> dict:
     model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-    client = Anthropic()  # берет ANTHROPIC_API_KEY из env по умолчанию
+    client = Anthropic()
     msg = client.messages.create(
         model=model,
         max_tokens=16,
         temperature=0,
         messages=[{"role": "user", "content": "Ответь одним словом: ok"}],
     )
-    # msg.content — список блоков; достанем текст
     text = ""
     for block in (msg.content or []):
         if getattr(block, "type", None) == "text":
@@ -91,6 +90,10 @@ async def api_extract(file: UploadFile = File(...)):
         return resp.model_dump()
     except UpstreamAIError as e:
         raise HTTPException(status_code=e.status_code, detail=_sanitize_error_message(e))
+    except anthropic.APIError:
+        raise HTTPException(status_code=502, detail="AI-сервис временно недоступен. Повторите попытку позже.")
+    except Exception as e:
+        if str(e).strip().lower() == "internal server error":
     except Exception as e:
         if _looks_like_upstream_ai_error(e):
             raise HTTPException(status_code=502, detail="AI-сервис временно недоступен. Повторите попытку позже.")
@@ -135,9 +138,9 @@ def _sanitize_error_message(err: Exception) -> str:
         return "Ошибка обработки документа. Повторите попытку позже."
     return message[:220]
 
+
 @app.get("/api/version")
 async def api_version():
-    import os
     return {
         "RENDER_GIT_COMMIT": os.getenv("RENDER_GIT_COMMIT"),
         "RENDER_GIT_BRANCH": os.getenv("RENDER_GIT_BRANCH"),
