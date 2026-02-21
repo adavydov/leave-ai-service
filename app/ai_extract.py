@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import anthropic
 import fitz  # PyMuPDF
 from anthropic import Anthropic
+from pydantic import ValidationError
 
 from .schemas import LeaveRequestExtract
 
@@ -143,6 +144,58 @@ def _parse_prompt_ru_json_only(draft_text: str) -> str:
 def _short_error(err: Exception) -> str:
     text = re.sub(r"\s+", " ", str(err or "")).strip()
     return text[:220] if text else type(err).__name__
+
+
+def _normalize_leave_type(raw: Optional[str]) -> str:
+    value = (raw or "").strip().lower()
+    if not value:
+        return "unknown"
+
+    aliases = {
+        "annual_paid": "annual_paid",
+        "ежегодный оплачиваемый отпуск": "annual_paid",
+        "ежегодный оплачиваемый": "annual_paid",
+        "оплачиваемый отпуск": "annual_paid",
+        "unpaid": "unpaid",
+        "без сохранения": "unpaid",
+        "без сохранения заработной платы": "unpaid",
+        "study": "study",
+        "учебный": "study",
+        "maternity": "maternity",
+        "беременности и родам": "maternity",
+        "childcare": "childcare",
+        "по уходу за ребенком": "childcare",
+        "по уходу за ребёнком": "childcare",
+        "other": "other",
+        "unknown": "unknown",
+    }
+
+    if value in aliases:
+        return aliases[value]
+
+    if "оплач" in value and "отпуск" in value:
+        return "annual_paid"
+    if "без сохран" in value:
+        return "unpaid"
+    if "учеб" in value:
+        return "study"
+    if "беремен" in value or "родам" in value:
+        return "maternity"
+    if "уход" in value and ("ребен" in value or "ребён" in value):
+        return "childcare"
+    return "unknown"
+
+
+def _normalize_fallback_payload(raw_json: Dict[str, Any], debug_steps: List[str], on_debug: Optional[Callable[[str], None]]) -> Dict[str, Any]:
+    payload = dict(raw_json)
+    leave = payload.get("leave")
+    if isinstance(leave, dict):
+        original = leave.get("leave_type")
+        normalized = _normalize_leave_type(original if isinstance(original, str) else None)
+        if original != normalized:
+            leave["leave_type"] = normalized
+            _add_debug(debug_steps, f"Шаг structured.fallback.normalize: leave_type '{original}' -> '{normalized}'", on_debug)
+    return payload
 
 
 def _trim_draft_text(draft_text: str, max_chars: int, debug_steps: List[str], on_debug: Optional[Callable[[str], None]]) -> str:
@@ -413,11 +466,19 @@ def extract_leave_request_with_debug(
             raw_text = _extract_text_from_msg(raw_msg)
             _add_debug(debug_steps, f"Шаг structured.fallback.create: ответ chars={len(raw_text)}", on_debug)
             raw_json = _extract_first_json_object(raw_text)
-            parsed = LeaveRequestExtract.model_validate(raw_json)
+            normalized_json = _normalize_fallback_payload(raw_json, debug_steps, on_debug)
+            parsed = LeaveRequestExtract.model_validate(normalized_json)
             parsed.quality.notes.append("structured_fallback=create+json")
             _add_debug(debug_steps, "Шаг structured.fallback.validate: JSON валиден", on_debug)
         except Exception as fallback_err:
             _add_debug(debug_steps, f"Шаг structured.fallback: ошибка {type(fallback_err).__name__}: {_short_error(fallback_err)}", on_debug)
+            if isinstance(fallback_err, ValidationError):
+                raise UpstreamAIError(
+                    step="structured",
+                    status_code=422,
+                    message="Ответ AI получен, но не соответствует схеме данных. Проверьте тип отпуска/даты в документе.",
+                    debug_steps=debug_steps,
+                ) from fallback_err
             source_err = fallback_err if isinstance(fallback_err, (anthropic.APIError, TimeoutError)) else e
             if isinstance(source_err, TimeoutError):
                 _raise_timeout("structured", source_err, debug_steps)
