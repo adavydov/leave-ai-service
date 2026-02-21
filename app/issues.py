@@ -22,6 +22,8 @@ _COMPLIANCE_CATEGORY_MAP = {
     'manager': 'document',
     'law': 'law_hints',
     'quality': 'quality',
+    'reason': 'law_hints',
+    'leave_type': 'law_hints',
 }
 
 
@@ -57,10 +59,10 @@ def from_compliance(items: Iterable[ComplianceIssue]) -> list[Issue]:
     out: list[Issue] = []
     for it in items:
         cat = _guess_category(it.code, _COMPLIANCE_CATEGORY_MAP)
-        hint = None
-        if it.level == 'error':
+        hint = it.action_hint
+        if not hint and it.level == 'error':
             hint = 'Исправьте заявление и загрузите PDF повторно.'
-        elif it.level == 'warn':
+        elif not hint and it.level == 'warn':
             hint = 'Проверьте поле и при необходимости уточните формулировку.'
         out.append(
             Issue(
@@ -72,6 +74,7 @@ def from_compliance(items: Iterable[ComplianceIssue]) -> list[Issue]:
                 message=it.message,
                 hint=hint,
                 details=it.details,
+                source=it.rule_id,
             )
         )
     return out
