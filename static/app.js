@@ -111,6 +111,33 @@ function handleNdjsonLine(line, state) {
   }
 }
 
+function appendLine(line) {
+  outEl.textContent += (outEl.textContent ? '\n' : '') + line;
+}
+
+function handleNdjsonLine(line, state) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+
+  let evt;
+  try {
+    evt = JSON.parse(trimmed);
+  } catch {
+    appendLine('[stream] некорректная строка: ' + trimmed.slice(0, 160));
+    return;
+  }
+
+  if (evt.type === 'step') {
+    appendLine('• ' + evt.message);
+  } else if (evt.type === 'result') {
+    state.finalPayload = evt.payload;
+    appendLine(evt.ok ? '✅ Завершено успешно' : `❌ Ошибка (${evt.status})`);
+  } else if (evt.detail) {
+    state.finalPayload = evt;
+    appendLine('❌ Ошибка (' + (evt.status || 'unknown') + ')');
+  }
+}
+
 btn.addEventListener('click', async () => {
   const f = fileEl.files && fileEl.files[0];
   if (!f) {
