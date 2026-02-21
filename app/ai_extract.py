@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import anthropic
@@ -9,6 +11,27 @@ from anthropic import Anthropic
 import fitz  # PyMuPDF
 
 from .schemas import LeaveRequestExtract
+
+
+class UpstreamAIError(RuntimeError):
+    def __init__(self, *, step: str, status_code: int, message: str):
+        super().__init__(message)
+        self.step = step
+        self.status_code = status_code
+
+
+def _safe_anthropic_error_message(err: Exception) -> str:
+    text = str(err or "").lower()
+    status_code = int(getattr(err, "status_code", 502) or 502)
+
+    if status_code == 429:
+        return "AI-сервис временно перегружен (rate limit). Повторите попытку через минуту."
+    if status_code in (400, 413, 422):
+        return "AI-сервис отклонил запрос к документу. Попробуйте другой PDF или уменьшите его размер."
+    if status_code >= 500 or "internal server error" in text or "bad gateway" in text:
+        return "AI-сервис временно недоступен. Повторите попытку позже."
+
+    return "Не удалось обработать документ во внешнем AI-сервисе."
 
 
 def _env_int(name: str, default: int) -> int:
@@ -26,6 +49,10 @@ def _env_str(name: str, default: str) -> str:
     return default if v is None or v.strip() == "" else v.strip()
 
 
+def _env_int_min(name: str, default: int, minimum: int) -> int:
+    return max(minimum, _env_int(name, default))
+
+
 def _pix_to_png_bytes(pix) -> bytes:
     # PyMuPDF в разных версиях принимает разные сигнатуры.
     try:
@@ -39,8 +66,8 @@ def _render_pdf_to_image_blocks(pdf_bytes: bytes) -> Tuple[List[Dict[str, Any]],
     Рендерим PDF в PNG и возвращаем список content-blocks для Claude Vision.
     Ограничиваемся первыми PDF_MAX_PAGES страницами, чтобы не улететь в лимиты.
     """
-    max_pages = _env_int("PDF_MAX_PAGES", 1)
-    target_long_edge = _env_int("PDF_TARGET_LONG_EDGE", 1568)  # рекомендация по latency/TTFT :contentReference[oaicite:3]{index=3}
+    max_pages = _env_int_min("PDF_MAX_PAGES", 1, 1)
+    target_long_edge = _env_int_min("PDF_TARGET_LONG_EDGE", 1568, 512)
     max_b64_bytes = _env_int("PDF_MAX_B64_BYTES", 30 * 1024 * 1024)  # запас под 32MB limit :contentReference[oaicite:4]{index=4}
     color_mode = _env_str("PDF_COLOR_MODE", "gray").lower()  # "gray" или "rgb"
 
@@ -150,6 +177,45 @@ def _parse_prompt_ru(draft_text: str) -> str:
     )
 
 
+
+
+def _parse_prompt_ru_json_only(draft_text: str) -> str:
+    return (
+        "На основе распознанного текста ниже верни ТОЛЬКО валидный JSON без markdown и комментариев.\n"
+        "Если поле не подтверждается текстом — null.\n"
+        "Обязательная структура: schema_version, employer_name, employee, manager, request_date, leave, signature_present, signature_confidence, raw_text, quality.\n\n"
+        "РАСПОЗНАННЫЙ ТЕКСТ:\n"
+        f"{draft_text}\n"
+    )
+
+
+def _extract_first_json_object(text: str) -> Dict[str, Any]:
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Пустой ответ модели")
+
+    decoder = json.JSONDecoder()
+    for idx, ch in enumerate(text):
+        if ch not in "[{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
+
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
+    if fenced:
+        try:
+            obj = json.loads(fenced.group(1).strip())
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError("В ответе модели не найден валидный JSON объект")
+
 def _extract_text_from_msg(msg) -> str:
     # msg.content — список блоков; берём все text блоки.
     out = []
@@ -197,8 +263,8 @@ def extract_leave_request_from_pdf_bytes(
     structured_model = os.getenv("ANTHROPIC_STRUCTURED_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
     max_retries = _env_int("ANTHROPIC_MAX_RETRIES", 2)
-    draft_max_tokens = _env_int("ANTHROPIC_DRAFT_MAX_TOKENS", 1024)
-    out_max_tokens = _env_int("ANTHROPIC_MAX_TOKENS", 1024)
+    draft_max_tokens = _env_int_min("ANTHROPIC_DRAFT_MAX_TOKENS", 1024, 256)
+    out_max_tokens = _env_int_min("ANTHROPIC_MAX_TOKENS", 1024, 512)
 
     client = Anthropic(api_key=api_key, max_retries=max_retries)
 
@@ -221,7 +287,12 @@ def extract_leave_request_from_pdf_bytes(
         )
         draft_text = _extract_text_from_msg(draft_msg)
     except anthropic.APIError as e:
-        raise RuntimeError(f"Anthropic vision step failed: {e}. render_info={render_info}") from e
+        status = int(getattr(e, "status_code", 502) or 502)
+        raise UpstreamAIError(
+            step="vision",
+            status_code=status if status >= 400 else 502,
+            message=_safe_anthropic_error_message(e),
+        ) from e
 
     if not draft_text:
         draft_text = "TRANSCRIPTION:\n(null)\nCANDIDATE_FIELDS:\n(null)"
@@ -237,7 +308,27 @@ def extract_leave_request_from_pdf_bytes(
             output_format=LeaveRequestExtract,
         ).parsed_output
     except anthropic.APIError as e:
-        raise RuntimeError(f"Anthropic structured step failed: {e}. render_info={render_info}") from e
+        # Фолбэк: parse API иногда отдает 5xx, хотя обычный messages.create работает.
+        try:
+            raw_msg = client.messages.create(
+                model=structured_model,
+                max_tokens=out_max_tokens,
+                temperature=0,
+                system=_system_prompt_ru(),
+                messages=[{"role": "user", "content": _parse_prompt_ru_json_only(draft_text)}],
+            )
+            raw_text = _extract_text_from_msg(raw_msg)
+            raw_json = _extract_first_json_object(raw_text)
+            parsed = LeaveRequestExtract.model_validate(raw_json)
+            parsed.quality.notes.append("structured_fallback=create+json")
+        except Exception as fallback_err:
+            source_err = fallback_err if isinstance(fallback_err, anthropic.APIError) else e
+            status = int(getattr(source_err, "status_code", 502) or 502)
+            raise UpstreamAIError(
+                step="structured",
+                status_code=status if status >= 400 else 502,
+                message=_safe_anthropic_error_message(source_err),
+            ) from source_err
 
     # Мягко добавим заметку о рендере (полезно для дебага, без секретов)
     try:
