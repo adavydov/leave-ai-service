@@ -322,7 +322,7 @@ def _render_pdf_to_image_blocks(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     max_pages = _env_int_min("PDF_MAX_PAGES", 1, 1)
     target_long_edge = _env_int_min("PDF_TARGET_LONG_EDGE", 1568, 512)
-    max_b64_bytes = _env_int("PDF_MAX_B64_BYTES", 30 * 1024 * 1024)
+    max_b64_chars = _env_int("MAX_IMAGE_B64_CHARS", 4_000_000)
     color_mode = _env_str("PDF_COLOR_MODE", "gray").lower()
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -356,21 +356,21 @@ def _render_pdf_to_image_blocks(
             blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}})
             page_stats.append({"page": i, "w_px": pix.width, "h_px": pix.height, "png_bytes": len(png_bytes), "b64_chars": len(b64)})
 
-        approx_b64_bytes = sum(p["b64_chars"] for p in page_stats)
-        if approx_b64_bytes > max_b64_bytes:
-            raise RuntimeError(f"Rendered images too large for request: approx_b64_bytes={approx_b64_bytes} > {max_b64_bytes}.")
+        approx_b64_chars = sum(p["b64_chars"] for p in page_stats)
+        if approx_b64_chars > max_b64_chars:
+            raise RuntimeError(f"Rendered images too large for request: approx_b64_chars={approx_b64_chars} > {max_b64_chars}.")
 
         info = {
             "total_pages": total_pages,
             "pages_sent": pages_to_send,
             "target_long_edge": target_long_edge,
             "color_mode": color_mode,
-            "approx_b64_bytes": approx_b64_bytes,
+            "approx_b64_chars": approx_b64_chars,
             "page_stats": page_stats,
         }
         _add_debug(
             debug_steps,
-            f"PDF->PNG ок: pages_sent={pages_to_send}, approx_b64_bytes={approx_b64_bytes}, page0={page_stats[0] if page_stats else None}",
+            f"PDF->PNG ок: pages_sent={pages_to_send}, approx_b64_chars={approx_b64_chars}, page0={page_stats[0] if page_stats else None}",
             on_debug,
         )
         return blocks, info
@@ -583,7 +583,7 @@ def extract_leave_request_with_debug(
     try:
         parsed.quality.notes.append(
             f"render: pages_sent={render_info['pages_sent']}/{render_info['total_pages']}, "
-            f"target_long_edge={render_info['target_long_edge']}, approx_b64_bytes={render_info['approx_b64_bytes']}, "
+            f"target_long_edge={render_info['target_long_edge']}, approx_b64_chars={render_info['approx_b64_chars']}, "
             f"color_mode={render_info['color_mode']}"
         )
     except Exception:
