@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+gunicorn
 anthropic>=0.77.0
 pydantic>=2
 python-multipart
