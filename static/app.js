@@ -11,6 +11,20 @@ const errorBox = document.getElementById('errorBox');
 
 let lastPayload = null;
 
+function humanLeaveType(v) {
+  const m = {
+    annual_paid: 'Ежегодный оплачиваемый',
+    unpaid: 'Без сохранения ЗП',
+    study: 'Учебный',
+    maternity: 'По беременности и родам',
+    childcare: 'По уходу за ребёнком',
+    other: 'Другой',
+    unknown: 'Не определён',
+  };
+  return m[v] || v || '—';
+}
+
+
 function setStatus(ok, text) {
   statusEl.className = `status ${ok ? 'ok' : 'bad'}`;
   statusEl.textContent = text;
@@ -77,13 +91,13 @@ function renderPayload(payload) {
   row('Должность', extract.employee?.position);
   row('Руководитель', extract.manager?.full_name);
   row('Дата заявления', extract.request_date);
-  row('Тип отпуска', extract.leave?.leave_type);
+  row('Тип отпуска', humanLeaveType(extract.leave?.leave_type));
   row('Начало отпуска', extract.leave?.start_date);
   row('Окончание отпуска', extract.leave?.end_date);
   row('Дней', extract.leave?.days_count);
   row('Подпись', extract.signature_present ? 'Да' : (extract.signature_present === false ? 'Нет' : 'Неизвестно'));
   row('Уверенность подписи', extract.signature_confidence);
-  row('Raw text', extract.raw_text);
+  row('Текст заявления (raw)', extract.raw_text);
 
   renderValidation(payload.validation);
 }
@@ -116,7 +130,9 @@ function handleNdjsonLine(line, state) {
 btn.addEventListener('click', async () => {
   const f = fileEl.files && fileEl.files[0];
   if (!f) {
-    alert('Выберите PDF файл.');
+    setStatus(false, 'НЕ ОК');
+    errorBox.hidden = false;
+    errorBox.textContent = 'Ошибка: сначала выберите PDF файл.';
     return;
   }
 
@@ -158,7 +174,7 @@ btn.addEventListener('click', async () => {
       renderPayload(state.finalPayload);
       if (!state.ok) {
         errorBox.hidden = false;
-        errorBox.textContent = state.finalPayload.detail || state.finalPayload.error || 'Ошибка обработки';
+        errorBox.textContent = 'Ошибка обработки: ' + (state.finalPayload.detail || state.finalPayload.error || 'неизвестная причина');
         row('Статус', 'НЕ ОК');
       }
     } else {

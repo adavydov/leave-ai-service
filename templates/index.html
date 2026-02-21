@@ -4,6 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Leave AI Service</title>
+  <script>
+    // ultra-early legacy compatibility for stale scripts expecting global outEl
+    window.outEl = window.outEl || { textContent: '' };
+  </script>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, Arial, sans-serif; max-width: 1080px; margin: 24px auto; padding: 0 16px; }
@@ -16,14 +20,26 @@
     .bad { background: #fde2e2; color: #8f1f1f; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #d8d8d8; vertical-align: top; }
-    ul { margin: 8px 0 0 20px; padding: 0; }
+    ul, ol { margin: 8px 0 0 20px; padding: 0; }
     .muted { color: #777; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    .small { font-size: 13px; }
   </style>
 </head>
 <body>
   <h1>Leave AI Service</h1>
-  <p class="hint">Загрузите PDF заявления. Ниже увидите пошаговую трассировку, статус и извлечённые данные в читабельном виде.</p>
+  <p class="hint">Загрузите PDF заявления и получите результат в человекочитаемом виде.</p>
+
+  <section class="card">
+    <h3>Как пользоваться</h3>
+    <ol>
+      <li>Нажмите на поле выбора файла и выберите PDF заявления.</li>
+      <li>Нажмите <b>«Обработать»</b>.</li>
+      <li>Смотрите блок <b>«Отладочные шаги»</b> — там видно, на каком этапе обработка.</li>
+      <li>Проверьте итог: <b>OK</b> или <b>НЕ ОК</b>.</li>
+      <li>При необходимости скачайте сырой JSON кнопкой <b>«Скачать JSON»</b>.</li>
+    </ol>
+  </section>
 
   <div class="row card">
     <input type="file" id="file" accept="application/pdf" />
@@ -34,6 +50,7 @@
 
   <section class="card">
     <h3>Отладочные шаги</h3>
+    <p class="hint small">Шаги выводятся последовательно в реальном времени.</p>
     <ul id="steps"></ul>
     <pre id="out" hidden></pre>
   </section>
@@ -56,10 +73,7 @@
     </table>
   </section>
 
-  <script>
-    // legacy/cached-script compatibility
-    window.outEl = document.getElementById('out') || { textContent: '' };
-  </script>
-  <script src="/static/app.js?v=20260221-2"></script>
+  <script>window.outEl = document.getElementById('out') || window.outEl;</script>
+  <script src="/static/app.js?v=20260221-3"></script>
 </body>
 </html>
