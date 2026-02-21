@@ -1,37 +1,45 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse
+import os
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
-import hashlib
+from dotenv import load_dotenv
+from starlette.concurrency import run_in_threadpool
 
-app = FastAPI(title="Leave AI Service (MVP)")
+from .ai_extract import extract_from_pdf_bytes
+
+load_dotenv()
+
+app = FastAPI(title="Leave AI Service")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
-
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+@app.get("/api/health/openai")
+async def openai_health():
+    from openai import OpenAI
+    client = OpenAI()
+    model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+    try:
+        r = client.responses.create(
+            model=model,
+            input="Say OK",
+            max_output_tokens=5
+        )
+        return {"status": "ok", "model": model}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
 @app.post("/api/extract")
 async def extract(file: UploadFile = File(...)):
     data = await file.read()
     if not data:
-        return JSONResponse({"error": "Empty file"}, status_code=400)
+        raise HTTPException(status_code=400, detail="Empty file")
 
-    if (file.content_type or "").lower() not in ("application/pdf", "application/x-pdf", ""):
-        # Некоторые браузеры/сканеры присылают пустой content-type. Не драматизируем.
-        pass
-
-    sha256 = hashlib.sha256(data).hexdigest()
-
-    return {
-        "file_name": file.filename,
-        "content_type": file.content_type,
-        "size_bytes": len(data),
-        "sha256": sha256,
-        "note": "MVP: загрузка работает. Следующий шаг: отправить PDF в OpenAI и вернуть структурированный JSON по схеме."
-    }
+    result = await run_in_threadpool(extract_from_pdf_bytes, data)
+    return result.model_dump()
