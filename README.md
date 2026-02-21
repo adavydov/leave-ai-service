@@ -81,7 +81,9 @@ Backward-compatible fields remain available: `extract`, `validation`, `debug_ste
 - `ANTHROPIC_API_KEY`
 - `ANTHROPIC_VISION_MODEL`, `ANTHROPIC_STRUCTURED_MODEL`
 - `ANTHROPIC_HTTP_TIMEOUT_S`, `ANTHROPIC_VISION_TIMEOUT_S`, `ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S`, `ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S`
-- `MAX_UPLOAD_MB`, `PDF_MAX_PAGES`, `MAX_IMAGE_B64_CHARS`, `ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS`
+- `MAX_UPLOAD_MB`, `PDF_MAX_PAGES`, `PDF_TARGET_LONG_EDGE`, `PDF_COLOR_MODE`
+- `MAX_IMAGE_B64_CHARS` — общий лимит на суммарный размер base64-строк PNG-страниц, отправляемых в vision-модель
+- `ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS`
 
 Use `trace.request_id` when searching logs in Render.
 
