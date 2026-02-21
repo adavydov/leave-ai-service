@@ -1,8 +1,7 @@
 fastapi
 uvicorn[standard]
+anthropic>=0.77.0
+pydantic>=2
 python-multipart
 jinja2
-openai
-python-dotenv
-openai
 python-dotenv

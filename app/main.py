@@ -1,45 +1,92 @@
+from __future__ import annotations
+
 import os
-from fastapi import FastAPI, UploadFile, File, HTTPException
+
+import anthropic
+from anthropic import Anthropic
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.requests import Request
-from dotenv import load_dotenv
-from starlette.concurrency import run_in_threadpool
 
-from .ai_extract import extract_from_pdf_bytes
+from .ai_extract import extract_leave_request_from_pdf_bytes
+from .schemas import ApiResponse
+from .validation import validate_extract
 
+# Load .env for local dev (Render uses env vars)
 load_dotenv()
 
-app = FastAPI(title="Leave AI Service")
+app = FastAPI(title="Leave Request Parser (RU)")
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "15"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "max_upload_mb": MAX_UPLOAD_MB, "mock_mode": os.getenv("MOCK_MODE", "0")},
+    )
 
-@app.get("/api/health/openai")
-async def openai_health():
-    from openai import OpenAI
-    client = OpenAI()
-    model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+
+@app.get("/api/health")
+async def api_health():
+    return {"status": "ok"}
+
+
+def _anthropic_probe() -> dict:
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    client = Anthropic()  # берет ANTHROPIC_API_KEY из env по умолчанию
+    msg = client.messages.create(
+        model=model,
+        max_tokens=16,
+        temperature=0,
+        messages=[{"role": "user", "content": "Ответь одним словом: ok"}],
+    )
+    # msg.content — список блоков; достанем текст
+    text = ""
+    for block in (msg.content or []):
+        if getattr(block, "type", None) == "text":
+            text += getattr(block, "text", "")
+    return {"status": "ok", "model": model, "reply": text.strip()[:80]}
+
+
+@app.get("/api/health/anthropic")
+async def api_health_anthropic():
+    if os.getenv("MOCK_MODE", "0") == "1":
+        return {"status": "ok", "mode": "mock"}
+
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY не задан в переменных окружения.")
+
     try:
-        r = client.responses.create(
-            model=model,
-            input="Say OK",
-            max_output_tokens=16
-        )
-        return {"status": "ok", "model": model}
+        return await run_in_threadpool(_anthropic_probe)
+    except anthropic.APIError as e:
+        raise HTTPException(status_code=502, detail=f"Anthropic API error: {e}")
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        raise HTTPException(status_code=500, detail=f"Ошибка: {type(e).__name__}: {e}")
+
 
 @app.post("/api/extract")
-async def extract(file: UploadFile = File(...)):
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
+async def api_extract(file: UploadFile = File(...)):
+    filename = file.filename or "upload.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Пожалуйста, загрузите PDF файл.")
 
-    result = await run_in_threadpool(extract_from_pdf_bytes, data)
-    return result.model_dump()
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Файл слишком большой. Лимит: {MAX_UPLOAD_MB} MB.")
+
+    try:
+        extract = await run_in_threadpool(extract_leave_request_from_pdf_bytes, data, filename)
+        validation = validate_extract(extract)
+        resp = ApiResponse(extract=extract, validation=validation)
+        return resp.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка обработки: {type(e).__name__}: {e}")
