@@ -235,6 +235,35 @@ def _normalize_fallback_payload(raw_json: Dict[str, Any], debug_steps: List[str]
                     on_debug,
                 )
             payload["signature_confidence"] = clipped_sc
+
+    quality = payload.get("quality")
+    if isinstance(quality, dict):
+        for key in ("notes", "missing_fields"):
+            value = quality.get(key)
+            if isinstance(value, str):
+                normalized_value = [value.strip()] if value.strip() else []
+                quality[key] = normalized_value
+                _add_debug(
+                    debug_steps,
+                    f"Шаг structured.fallback.normalize: quality.{key} string -> list[{len(normalized_value)}]",
+                    on_debug,
+                )
+            elif isinstance(value, list):
+                normalized_value = []
+                for item in value:
+                    if item is None:
+                        continue
+                    text = str(item).strip()
+                    if text:
+                        normalized_value.append(text)
+                if normalized_value != value:
+                    quality[key] = normalized_value
+                    _add_debug(
+                        debug_steps,
+                        f"Шаг structured.fallback.normalize: quality.{key} list sanitized ({len(value)} -> {len(normalized_value)})",
+                        on_debug,
+                    )
+
     return payload
 
 
