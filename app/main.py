@@ -27,6 +27,9 @@ settings = get_settings()
 logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Leave Request Parser (RU)")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -71,6 +74,7 @@ async def api_health_anthropic():
     try:
         return await run_in_threadpool(_anthropic_probe)
     except anthropic.APIError as e:
+        logger.exception("Anthropic health probe APIError")
         raise HTTPException(status_code=502, detail=f"Anthropic API error: {e}")
     except Exception:
         raise HTTPException(status_code=500, detail='Ошибка health-check Anthropic.')
@@ -89,7 +93,7 @@ async def _read_pdf_upload(file: UploadFile) -> tuple[str, bytes]:
 def _sanitize_error_message(err: Exception) -> str:
     message = re.sub(r"<[^>]+>", " ", str(err or "")).strip()
     message = re.sub(r"\s+", " ", message).strip(" .,:;-")
-    return message[:320] if message else f"Ошибка обработки: {type(err).__name__}"
+h    return message[:320] if message else f"Ошибка обработки: {type(err).__name__}"
 
 
 def _upstream_error_to_issue_and_status(err: Exception, where: str):
