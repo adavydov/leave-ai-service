@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import os
+import re
 
 import anthropic
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .ai_extract import extract_leave_request_from_pdf_bytes
+from .ai_extract import UpstreamAIError, extract_leave_request_with_debug
 from .schemas import ApiResponse
 from .validation import validate_extract
 
@@ -42,14 +43,13 @@ async def api_health():
 
 def _anthropic_probe() -> dict:
     model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-    client = Anthropic()  # берет ANTHROPIC_API_KEY из env по умолчанию
+    client = Anthropic()
     msg = client.messages.create(
         model=model,
         max_tokens=16,
         temperature=0,
         messages=[{"role": "user", "content": "Ответь одним словом: ok"}],
     )
-    # msg.content — список блоков; достанем текст
     text = ""
     for block in (msg.content or []):
         if getattr(block, "type", None) == "text":
@@ -84,16 +84,56 @@ async def api_extract(file: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail=f"Файл слишком большой. Лимит: {MAX_UPLOAD_MB} MB.")
 
     try:
-        extract = await run_in_threadpool(extract_leave_request_from_pdf_bytes, data, filename)
+        extract, debug_steps = await run_in_threadpool(extract_leave_request_with_debug, data, filename)
         validation = validate_extract(extract)
-        resp = ApiResponse(extract=extract, validation=validation)
-        return resp.model_dump()
+        resp = ApiResponse(extract=extract, validation=validation).model_dump()
+        resp["debug_steps"] = debug_steps
+        return resp
+    except UpstreamAIError as e:
+        return JSONResponse(
+            status_code=e.status_code,
+            content={
+                "error": "Ошибка при обработке PDF.",
+                "status": e.status_code,
+                "detail": _sanitize_error_message(e),
+                "debug_steps": getattr(e, "debug_steps", []),
+            },
+        )
+    except anthropic.APIError as e:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "Ошибка при обработке PDF.",
+                "status": 502,
+                "detail": "AI-сервис временно недоступен. Повторите попытку позже.",
+                "debug_steps": [f"Anthropic APIError в api_extract: {type(e).__name__}"],
+            },
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка обработки: {type(e).__name__}: {e}")
+        status = 502 if str(e).strip().lower() == "internal server error" else 500
+        return JSONResponse(
+            status_code=status,
+            content={
+                "error": "Ошибка при обработке PDF.",
+                "status": status,
+                "detail": _sanitize_error_message(e),
+                "debug_steps": [f"Непредвиденная ошибка api_extract: {type(e).__name__}", _sanitize_error_message(e)],
+            },
+        )
+
+
+def _sanitize_error_message(err: Exception) -> str:
+    message = re.sub(r"<[^>]+>", " ", str(err or "")).strip()
+    message = re.sub(r"\s+", " ", message).strip(" .,:;-")
+    if not message:
+        return f"Ошибка обработки: {type(err).__name__}"
+    if message.lower() == "internal server error":
+        return "Ошибка обработки документа. Повторите попытку позже."
+    return message[:220]
+
 
 @app.get("/api/version")
 async def api_version():
-    import os
     return {
         "RENDER_GIT_COMMIT": os.getenv("RENDER_GIT_COMMIT"),
         "RENDER_GIT_BRANCH": os.getenv("RENDER_GIT_BRANCH"),

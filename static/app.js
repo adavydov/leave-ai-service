@@ -16,10 +16,37 @@ btn.addEventListener('click', async () => {
 
   try {
     const res = await fetch('/api/extract', { method: 'POST', body: fd });
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
     const text = await res.text();
 
     let obj;
-    try { obj = JSON.parse(text); } catch { obj = { raw: text }; }
+    if (contentType.includes('application/json')) {
+      try {
+        obj = JSON.parse(text);
+      } catch {
+        obj = { error: 'Сервер вернул повреждённый JSON.', status: res.status };
+      }
+    } else {
+      const shortText = text
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 500);
+      obj = {
+        error: 'Сервер вернул не JSON ответ.',
+        status: res.status,
+        detail: shortText || 'Пустой ответ',
+      };
+    }
+
+    if (!res.ok) {
+      obj = {
+        error: 'Ошибка при обработке PDF.',
+        status: res.status,
+        detail: obj?.detail || obj?.error || 'Неизвестная ошибка',
+        debug_steps: Array.isArray(obj?.debug_steps) ? obj.debug_steps : [],
+      };
+    }
 
     outEl.textContent = JSON.stringify(obj, null, 2);
   } catch (e) {
