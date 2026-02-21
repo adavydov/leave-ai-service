@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import anthropic
@@ -138,6 +139,38 @@ def _parse_prompt_ru_json_only(draft_text: str) -> str:
     )
 
 
+
+
+
+
+def _short_error(err: Exception) -> str:
+    text = re.sub(r"\s+", " ", str(err or "")).strip()
+    return text[:220] if text else type(err).__name__
+
+
+def _trim_draft_text(draft_text: str, max_chars: int, debug_steps: List[str], on_debug: Optional[Callable[[str], None]]) -> str:
+    cleaned = (draft_text or "").replace("\x00", "").strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    _add_debug(debug_steps, f"Шаг structured.parse: draft_text обрезан с {len(cleaned)} до {max_chars} символов", on_debug)
+    return cleaned[:max_chars]
+def _run_with_timeout(fn: Callable[[], Any], timeout_s: int, label: str):
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=max(1, int(timeout_s)))
+        except FuturesTimeoutError as e:
+            raise TimeoutError(f"{label} timed out after {timeout_s}s") from e
+
+
+def _raise_timeout(step: str, err: TimeoutError, debug_steps: List[str]):
+    raise UpstreamAIError(
+        step=step,
+        status_code=504,
+        message="AI-сервис не ответил вовремя. Повторите попытку позже или уменьшите размер PDF.",
+        debug_steps=debug_steps,
+    ) from err
+
 def _render_pdf_to_image_blocks(
     pdf_bytes: bytes,
     debug_steps: List[str],
@@ -263,13 +296,23 @@ def extract_leave_request_with_debug(
 
     vision_model = model or os.getenv("ANTHROPIC_VISION_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     structured_model = os.getenv("ANTHROPIC_STRUCTURED_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-    max_retries = _env_int("ANTHROPIC_MAX_RETRIES", 2)
+    max_retries = _env_int("ANTHROPIC_MAX_RETRIES", 0)
     draft_max_tokens = _env_int_min("ANTHROPIC_DRAFT_MAX_TOKENS", 1024, 256)
     out_max_tokens = _env_int_min("ANTHROPIC_MAX_TOKENS", 1024, 512)
+    vision_timeout_s = _env_int_min("ANTHROPIC_VISION_TIMEOUT_S", 90, 15)
+    structured_parse_timeout_s = _env_int_min("ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S", 70, 15)
+    structured_fallback_timeout_s = _env_int_min("ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S", 90, 15)
+    structured_draft_max_chars = _env_int_min("ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS", 12000, 2000)
 
     client = Anthropic(api_key=api_key, max_retries=max_retries)
 
-    _add_debug(debug_steps, f"Конфиг AI: vision_model={vision_model}, structured_model={structured_model}, retries={max_retries}", on_debug)
+    _add_debug(
+        debug_steps,
+        f"Конфиг AI: vision_model={vision_model}, structured_model={structured_model}, retries={max_retries}, "
+        f"vision_timeout_s={vision_timeout_s}, structured_parse_timeout_s={structured_parse_timeout_s}, "
+        f"structured_fallback_timeout_s={structured_fallback_timeout_s}, structured_draft_max_chars={structured_draft_max_chars}",
+        on_debug,
+    )
 
     try:
         image_blocks, render_info = _render_pdf_to_image_blocks(pdf_bytes, debug_steps, on_debug=on_debug)
@@ -284,15 +327,22 @@ def extract_leave_request_with_debug(
 
     try:
         _add_debug(debug_steps, "Шаг vision: отправка PNG в Anthropic", on_debug)
-        draft_msg = client.messages.create(
-            model=vision_model,
-            max_tokens=draft_max_tokens,
-            temperature=0,
-            system=_system_prompt_ru(),
-            messages=[{"role": "user", "content": image_blocks + [{"type": "text", "text": _draft_prompt_ru()}]}],
-        )
+
+        def _vision_call():
+            return client.messages.create(
+                model=vision_model,
+                max_tokens=draft_max_tokens,
+                temperature=0,
+                system=_system_prompt_ru(),
+                messages=[{"role": "user", "content": image_blocks + [{"type": "text", "text": _draft_prompt_ru()}]}],
+            )
+
+        draft_msg = _run_with_timeout(_vision_call, vision_timeout_s, "vision")
         draft_text = _extract_text_from_msg(draft_msg)
         _add_debug(debug_steps, f"Шаг vision: ответ получен, chars={len(draft_text)}", on_debug)
+    except TimeoutError as e:
+        _add_debug(debug_steps, "Шаг vision: timeout", on_debug)
+        _raise_timeout("vision", e, debug_steps)
     except anthropic.APIError as e:
         _add_debug(debug_steps, f"Шаг vision: ошибка API: {type(e).__name__}", on_debug)
         _raise_upstream("vision", e, debug_steps)
@@ -301,27 +351,39 @@ def extract_leave_request_with_debug(
         draft_text = "TRANSCRIPTION:\n(null)\nCANDIDATE_FIELDS:\n(null)"
         _add_debug(debug_steps, "Шаг vision: пустой ответ, подставлен дефолтный draft", on_debug)
 
+    draft_text = _trim_draft_text(draft_text, structured_draft_max_chars, debug_steps, on_debug)
+    if "base64" in draft_text.lower() and len(draft_text) > 4000:
+        _add_debug(debug_steps, "Шаг structured.parse: предупреждение — в draft_text есть маркеры base64", on_debug)
+    _add_debug(debug_steps, f"Шаг structured.parse: draft_chars={len(draft_text)}", on_debug)
+
     try:
         _add_debug(debug_steps, "Шаг structured.parse: отправка draft на структуризацию", on_debug)
-        parsed = client.messages.parse(
-            model=structured_model,
-            max_tokens=out_max_tokens,
-            temperature=0,
-            system=_system_prompt_ru(),
-            messages=[{"role": "user", "content": _parse_prompt_ru_json_only(draft_text)}],
-            output_format=LeaveRequestExtract,
-        ).parsed_output
-        _add_debug(debug_steps, "Шаг structured.parse: успешно", on_debug)
-    except anthropic.APIError as e:
-        _add_debug(debug_steps, "Шаг structured.parse: ошибка, пробуем fallback через messages.create", on_debug)
-        try:
-            raw_msg = client.messages.create(
+
+        def _structured_parse_call():
+            return client.messages.parse(
                 model=structured_model,
                 max_tokens=out_max_tokens,
                 temperature=0,
                 system=_system_prompt_ru(),
                 messages=[{"role": "user", "content": _parse_prompt_ru_json_only(draft_text)}],
-            )
+                output_format=LeaveRequestExtract,
+            ).parsed_output
+
+        parsed = _run_with_timeout(_structured_parse_call, structured_parse_timeout_s, "structured.parse")
+        _add_debug(debug_steps, "Шаг structured.parse: успешно", on_debug)
+    except Exception as e:
+        _add_debug(debug_steps, f"Шаг structured.parse: ошибка {type(e).__name__}: {_short_error(e)}; пробуем fallback через messages.create", on_debug)
+        try:
+            def _structured_fallback_call():
+                return client.messages.create(
+                    model=structured_model,
+                    max_tokens=out_max_tokens,
+                    temperature=0,
+                    system=_system_prompt_ru(),
+                    messages=[{"role": "user", "content": _parse_prompt_ru_json_only(draft_text)}],
+                )
+
+            raw_msg = _run_with_timeout(_structured_fallback_call, structured_fallback_timeout_s, "structured.fallback.create")
             raw_text = _extract_text_from_msg(raw_msg)
             _add_debug(debug_steps, f"Шаг structured.fallback.create: ответ chars={len(raw_text)}", on_debug)
             raw_json = _extract_first_json_object(raw_text)
@@ -329,17 +391,18 @@ def extract_leave_request_with_debug(
             parsed.quality.notes.append("structured_fallback=create+json")
             _add_debug(debug_steps, "Шаг structured.fallback.validate: JSON валиден", on_debug)
         except Exception as fallback_err:
-            _add_debug(debug_steps, f"Шаг structured.fallback: ошибка: {type(fallback_err).__name__}", on_debug)
-            source_err = fallback_err if isinstance(fallback_err, anthropic.APIError) else e
-            _raise_upstream("structured", source_err, debug_steps)
-    except Exception as e:
-        _add_debug(debug_steps, f"Шаг structured.parse: не-API ошибка: {type(e).__name__}", on_debug)
-        raise UpstreamAIError(
-            step="structured",
-            status_code=500,
-            message="Ошибка структуризации ответа AI-сервиса.",
-            debug_steps=debug_steps,
-        ) from e
+            _add_debug(debug_steps, f"Шаг structured.fallback: ошибка {type(fallback_err).__name__}: {_short_error(fallback_err)}", on_debug)
+            source_err = fallback_err if isinstance(fallback_err, (anthropic.APIError, TimeoutError)) else e
+            if isinstance(source_err, TimeoutError):
+                _raise_timeout("structured", source_err, debug_steps)
+            if isinstance(source_err, anthropic.APIError):
+                _raise_upstream("structured", source_err, debug_steps)
+            raise UpstreamAIError(
+                step="structured",
+                status_code=500,
+                message="Ошибка структуризации ответа AI-сервиса.",
+                debug_steps=debug_steps,
+            ) from source_err
 
     try:
         parsed.quality.notes.append(

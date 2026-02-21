@@ -19,7 +19,7 @@ btn.addEventListener('click', async () => {
   fd.append('file', f);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 180000);
+  const timeoutId = setTimeout(() => controller.abort(), 300000);
 
   try {
     const res = await fetch('/api/extract/stream', { method: 'POST', body: fd, signal: controller.signal });
@@ -69,7 +69,7 @@ btn.addEventListener('click', async () => {
     }
   } catch (e) {
     const msg = e && e.name === 'AbortError'
-      ? '❌ Запрос выполняется слишком долго (>180с). Скопируйте шаги выше и проверьте Render logs.'
+      ? '❌ Запрос выполняется слишком долго (>300с). Скопируйте шаги выше и проверьте Render logs.'
       : '❌ Ошибка запроса: ' + (e && e.message ? e.message : String(e));
     appendLine(msg);
   } finally {

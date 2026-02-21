@@ -44,3 +44,10 @@ gunicorn app.main:app -c gunicorn_conf.py
 - `capture_output = True`
 
 Это гарантирует, что `logger.exception(...)` и stdout/stderr попадут в логи платформы (Render logs).
+
+- `ANTHROPIC_VISION_TIMEOUT_S` — таймаут vision-запроса в секундах (по умолчанию 90)
+- `ANTHROPIC_STRUCTURED_PARSE_TIMEOUT_S` — таймаут structured.parse в секундах (по умолчанию 70)
+- `ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S` — таймаут structured fallback create в секундах (по умолчанию 90)
+
+- `ANTHROPIC_MAX_RETRIES` — количество SDK-ретраев. Рекомендуется `0` для прозрачной диагностики structured-ошибок.
+- `ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS` — ограничение размера draft_text перед structured-шагом (по умолчанию 12000).
