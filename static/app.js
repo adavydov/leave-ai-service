@@ -1,6 +1,6 @@
 import { uploadPdf } from './api.js';
 import { copyDiagnosticReport, copyJson, copyText, downloadCsv, downloadJson, downloadText } from './export.js';
-import { render, scrollToFieldOrCategory, buildRewriteText } from './render.js';
+import { render, buildRewriteText } from './render.js';
 import { createState, resetRun, setEditableExtract, updateStepFromLog } from './state.js';
 import { byId, MAX_MB, nowIso, showToast, smartErrorTitle } from './utils.js';
 import { runStreamSelfChecks } from './stream.js';
@@ -67,13 +67,6 @@ function setTheme(theme) {
   localStorage.setItem('theme', theme);
 }
 
-function updateIssueFilters() {
-  state.filters.search = byId('issueSearch').value || '';
-  state.filters.severity = byId('severityFilter').value || 'all';
-  state.filters.category = byId('categoryFilter').value || 'all';
-  render(state);
-}
-
 function setByPath(obj, path, value) {
   const parts = path.split('.');
   let cur = obj;
@@ -89,24 +82,6 @@ function applyEdit(path, value) {
   if (!state.editableExtract) return;
   setByPath(state.editableExtract, path, path === 'leave.days_count' ? (value === '' ? null : Number(value)) : value);
   byId('rewriteText').textContent = buildRewriteText(state.editableExtract, state.result?.issues || []);
-}
-
-function openIssueInInspector(issue) {
-  state.selectedIssue = issue || null;
-  if (issue?.field) scrollToFieldOrCategory(issue.field, null);
-  render(state);
-}
-
-function filteredIssues() {
-  return (state.result?.issues || [])
-    .filter((i) => state.filters.severity === 'all' || i.severity === state.filters.severity)
-    .filter((i) => state.filters.category === 'all' || (i.category || 'unknown') === state.filters.category)
-    .filter((i) => !state.filters.search || `${i.message || ''} ${i.hint || ''} ${i.field || ''} ${i.code || ''}`.toLowerCase().includes(state.filters.search.toLowerCase()));
-}
-
-function switchTab(name) {
-  state.activeTab = name;
-  render(state);
 }
 
 async function startProcessing(file) {
@@ -153,7 +128,6 @@ async function startProcessing(file) {
     state.phase = 'done';
     state.steps.forEach((s) => { s.status = 'done'; });
     setEditableExtract(state);
-    state.selectedIssue = (state.result.issues || []).find((i) => i.severity === 'error') || (state.result.issues || [])[0] || null;
 
     const rid = state.result?.trace?.request_id;
     if (rid && state.editableExtract) {
@@ -165,6 +139,7 @@ async function startProcessing(file) {
     saveHistory(sanitizeForHistory(state.result, file.name));
     renderHistory();
     render(state);
+    showToast('Проверка завершена. Можно скачать результат ниже.');
   } catch (e) {
     state.phase = (e?.name === 'AbortError') ? 'cancelled' : 'error';
     if (e?.name === 'AbortError') {
@@ -202,15 +177,8 @@ function bindEvents() {
     if (e.key === 'Escape') byId('fileInput').value = '';
   });
 
-  const copyRequestBtn = byId('copyRequestBtn');
-  if (copyRequestBtn) {
-    copyRequestBtn.addEventListener('click', async () => {
-      const rid = state.result?.trace?.request_id || state.requestId || state.error?.trace?.request_id;
-      if (!rid) return;
-      await navigator.clipboard.writeText(rid);
-      showToast('Скопировано');
-    });
-  }
+  byId('quickDownloadTextBtn').addEventListener('click', () => downloadText(byId('rewriteText').textContent || ''));
+  byId('quickDownloadJsonBtn').addEventListener('click', () => state.result && downloadJson({ ...state.result, extract: state.editableExtract || state.result.extract }));
 
   byId('copyJsonBtn').addEventListener('click', () => state.result && copyJson({ ...state.result, extract: state.editableExtract || state.result.extract }));
   byId('downloadJsonBtn').addEventListener('click', () => state.result && downloadJson({ ...state.result, extract: state.editableExtract || state.result.extract }));
@@ -220,38 +188,6 @@ function bindEvents() {
 
   byId('copyTextBtn').addEventListener('click', () => copyText(byId('rewriteText').textContent || ''));
   byId('downloadTextBtn').addEventListener('click', () => downloadText(byId('rewriteText').textContent || ''));
-  byId('copyTextQuickBtn').addEventListener('click', () => copyText(byId('rewriteText').textContent || ''));
-  byId('goToIssuesBtn').addEventListener('click', () => switchTab('issues'));
-
-  byId('issueSearch').addEventListener('input', updateIssueFilters);
-  byId('severityFilter').addEventListener('change', updateIssueFilters);
-  byId('categoryFilter').addEventListener('change', updateIssueFilters);
-
-  byId('issuesExplorer').addEventListener('click', (e) => {
-    const btnField = e.target.closest('.linkToField');
-    if (btnField) {
-      const field = btnField.getAttribute('data-field');
-      scrollToFieldOrCategory(field, null);
-      const issue = (state.result?.issues || []).find((i) => i.field === field);
-      if (issue) openIssueInInspector(issue);
-      return;
-    }
-
-    const btnCat = e.target.closest('.linkToCategory');
-    if (btnCat) {
-      const cat = btnCat.getAttribute('data-category');
-      scrollToFieldOrCategory(null, cat);
-      return;
-    }
-
-    const selectBtn = e.target.closest('.selectIssueBtn');
-    if (selectBtn) {
-      const category = selectBtn.getAttribute('data-category');
-      const idx = Number(selectBtn.getAttribute('data-issue-index'));
-      const list = filteredIssues().filter((i) => (i.category || 'unknown') === category);
-      openIssueInInspector(list[idx] || null);
-    }
-  });
 
   byId('editToggle').addEventListener('change', (e) => {
     state.editMode = Boolean(e.target.checked);
@@ -266,32 +202,6 @@ function bindEvents() {
     applyEdit(path, target.value);
     render(state);
   });
-
-  byId('applyIssueBtn').addEventListener('click', () => {
-    if (!state.selectedIssue?.field) return;
-    const val = byId('inspectorValue')?.value;
-    if (val == null) return;
-    applyEdit(state.selectedIssue.field, val);
-    showToast('Изменение применено');
-    render(state);
-  });
-
-  byId('nextIssueBtn').addEventListener('click', () => {
-    const list = filteredIssues();
-    if (!list.length) return;
-    const cur = list.findIndex((i) => i === state.selectedIssue);
-    openIssueInInspector(list[(cur + 1 + list.length) % list.length]);
-  });
-
-  byId('markFixedBtn').addEventListener('click', () => {
-    if (!state.selectedIssue || !state.result?.issues) return;
-    state.result.issues = state.result.issues.filter((i) => i !== state.selectedIssue);
-    state.selectedIssue = state.result.issues[0] || null;
-    showToast('Отмечено как исправлено');
-    render(state);
-  });
-
-  document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
 
   byId('historyToggle').addEventListener('click', () => {
     historyOpen = !historyOpen;
@@ -311,12 +221,9 @@ function bindEvents() {
     state.result = { extract: item.extract, issues: item.issues, decision: item.decision, trace: { request_id: item.request_id, timings_ms: item.timings_ms } };
     state.phase = 'done';
     setEditableExtract(state);
-    state.selectedIssue = (state.result.issues || [])[0] || null;
     render(state);
     showToast('Результат загружен из истории');
   });
-
-  byId('logToggle').addEventListener('click', () => byId('logBody').classList.toggle('hidden'));
 
   byId('helpToggle').addEventListener('click', () => byId('helpDialog').showModal());
   byId('closeHelpBtn').addEventListener('click', () => byId('helpDialog').close());

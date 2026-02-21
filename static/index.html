@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Leave AI</title>
-  <link rel="stylesheet" href="/static/styles.css?v=4" />
+  <link rel="stylesheet" href="/static/styles.css?v=5" />
 </head>
 <body>
   <header class="topbar" role="banner">
-    <div class="brand">Leave AI <span>Проверка заявления на отпуск</span></div>
+    <div class="brand">Leave AI <span>Быстрая проверка заявления на отпуск</span></div>
     <div class="top-actions">
       <button id="historyToggle" type="button">История</button>
       <button id="helpToggle" type="button">Помощь</button>
@@ -16,127 +16,75 @@
     </div>
   </header>
 
-  <main class="layout">
-    <aside class="sidebar card">
-      <h3>Загрузить другое</h3>
+  <main class="layout-simple">
+    <section class="card">
+      <h2>1) Загрузите файл</h2>
       <div id="dropzone" class="dropzone" tabindex="0" aria-label="Зона перетаскивания PDF">
         <p><strong>Перетащите PDF</strong> или выберите файл</p>
         <p class="muted">PDF до 15MB</p>
         <input id="fileInput" type="file" accept="application/pdf" />
         <div class="row">
-          <button id="processBtn" class="primary" type="button">Проверить заявление</button>
+          <button id="processBtn" class="primary" type="button">Проверить файл</button>
           <button id="cancelBtn" type="button" class="hidden">Отменить</button>
         </div>
       </div>
       <p id="fileHint" class="muted"></p>
-
-      <h4>Шаги</h4>
-      <div id="stepper" class="stepper"></div>
-
-      <h4>Сводка</h4>
-      <p id="issuesSummary" class="muted">Ошибок: 0 • Предупреждений: 0 • Инфо: 0</p>
-      <span id="headerBadge" class="badge">IDLE</span>
-    </aside>
-
-    <section class="main card">
-      <section id="decisionBanner" class="decision">
-        <h2 id="decisionTitle">Ожидание проверки</h2>
-        <p id="decisionReason" class="muted">Загрузите PDF, чтобы получить решение.</p>
-        <div class="row">
-          <button id="goToIssuesBtn" type="button">Перейти к ошибкам</button>
-          <button id="copyTextQuickBtn" type="button">Скопировать готовый текст</button>
-        </div>
-      </section>
-
-      <nav class="tabs" role="tablist" aria-label="Основные вкладки">
-        <button class="tab is-active" data-tab="issues" role="tab">Ошибки</button>
-        <button class="tab" data-tab="data" role="tab">Данные</button>
-        <button class="tab" data-tab="text" role="tab">Текст заявления</button>
-        <button class="tab" data-tab="export" role="tab">Экспорт</button>
-      </nav>
-
-      <section id="tab-issues" class="tab-panel">
-        <div class="row">
-          <input id="issueSearch" type="search" placeholder="Поиск" />
-          <select id="severityFilter">
-            <option value="all">Все severity</option>
-            <option value="error">Ошибки</option>
-            <option value="warn">Предупреждения</option>
-            <option value="info">Инфо</option>
-          </select>
-          <select id="categoryFilter">
-            <option value="all">Все категории</option>
-            <option value="document">document</option>
-            <option value="dates">dates</option>
-            <option value="counts">counts</option>
-            <option value="signature">signature</option>
-            <option value="law_hints">law_hints</option>
-            <option value="quality">quality</option>
-            <option value="system">system</option>
-            <option value="upstream">upstream</option>
-          </select>
-        </div>
-        <div id="issuesExplorer"></div>
-      </section>
-
-      <section id="tab-data" class="tab-panel hidden">
-        <div class="row"><label><input id="editToggle" type="checkbox" /> Редактировать поля</label></div>
-        <div id="extractFormWrap" class="hidden"></div>
-        <table class="table" id="resultTable"><tbody></tbody></table>
-      </section>
-
-      <section id="tab-text" class="tab-panel hidden">
-        <pre id="rewriteText" class="pre"></pre>
-        <div class="row">
-          <button id="copyTextBtn" type="button">Скопировать текст</button>
-          <button id="downloadTextBtn" type="button">Скачать .txt</button>
-        </div>
-        <details id="rawSection" class="hidden"><summary>Распознанный текст</summary><pre id="rawText" class="pre"></pre></details>
-      </section>
-
-      <section id="tab-export" class="tab-panel hidden">
-        <p class="muted">request_id: <span id="requestId">—</span></p>
-        <p class="muted">timings: <span id="timings">—</span></p>
-        <div class="row">
-          <button id="copyJsonBtn" type="button">Copy JSON</button>
-          <button id="downloadJsonBtn" type="button">Download JSON</button>
-          <button id="downloadCsvBtn" type="button">Download CSV</button>
-          <button id="printBtn" type="button">Печать</button>
-          <button id="copyDiagBtn" type="button">Copy diagnostic report</button>
-        </div>
-      </section>
     </section>
 
-    <aside class="inspector card" id="inspector">
-      <h3>Инспектор ошибки</h3>
-      <div id="inspectorEmpty" class="muted">Выберите ошибку в списке слева.</div>
-      <div id="inspectorBody" class="hidden">
-        <p><strong>Что не так:</strong> <span id="inspectorMessage"></span></p>
-        <p><strong>Как исправить:</strong> <span id="inspectorHint"></span></p>
-        <p><strong>Поле:</strong> <span id="inspectorField"></span></p>
-        <div id="inspectorEditor"></div>
-        <div class="row">
-          <button id="applyIssueBtn" type="button" class="primary">Применить</button>
-          <button id="nextIssueBtn" type="button">Следующая ошибка</button>
-          <button id="markFixedBtn" type="button">Отметить как исправлено</button>
-        </div>
-      </div>
-    </aside>
-  </main>
+    <section class="card" id="decisionBanner">
+      <h2 id="decisionTitle">2) Статус проверки</h2>
+      <p id="decisionReason" class="muted">Загрузите PDF, чтобы начать проверку.</p>
+      <p id="headerBadge" class="badge">Статус: ожидание</p>
+    </section>
 
-  <section id="logDrawer" class="log-drawer">
-    <button id="logToggle" type="button">Диагностика</button>
-    <div id="logBody" class="hidden">
+    <section class="card">
+      <h2>3) Ошибки в файле</h2>
+      <p id="issuesSummary" class="muted">Критичных: 0 • Некритичных: 0</p>
+      <div id="issuesExplorer"></div>
+    </section>
+
+    <section class="card" id="quickDownload">
+      <h2>4) Скачайте результат</h2>
+      <p class="muted">Файлы доступны сразу после проверки.</p>
+      <div class="row">
+        <button id="quickDownloadTextBtn" class="primary" type="button" disabled>Скачать исправленный текст (.txt)</button>
+        <button id="quickDownloadJsonBtn" type="button" disabled>Скачать отчет (.json)</button>
+      </div>
+    </section>
+
+    <details class="card">
+      <summary><strong>Расширенные инструменты</strong></summary>
+      <div class="row"><label><input id="editToggle" type="checkbox" /> Редактировать поля вручную</label></div>
+      <div id="extractFormWrap" class="hidden"></div>
+      <table class="table" id="resultTable"><tbody></tbody></table>
+      <pre id="rewriteText" class="pre"></pre>
+      <details id="rawSection" class="hidden"><summary>Распознанный текст</summary><pre id="rawText" class="pre"></pre></details>
+      <p class="muted">request_id: <span id="requestId">—</span></p>
+      <p class="muted">timings: <span id="timings">—</span></p>
+      <div class="row">
+        <button id="copyTextBtn" type="button">Скопировать текст</button>
+        <button id="downloadTextBtn" type="button">Скачать .txt</button>
+        <button id="copyJsonBtn" type="button">Copy JSON</button>
+        <button id="downloadJsonBtn" type="button">Download JSON</button>
+        <button id="downloadCsvBtn" type="button">Download CSV</button>
+        <button id="printBtn" type="button">Печать</button>
+        <button id="copyDiagBtn" type="button">Copy diagnostic report</button>
+      </div>
+    </details>
+
+    <section id="errorCard" class="card hidden">
+      <h3 id="errorTitle">Ошибка</h3>
+      <p id="errorMessage"></p>
+      <pre id="errorDetails" class="pre"></pre>
+      <button id="retryBtn" type="button">Повторить</button>
+    </section>
+
+    <details class="card">
+      <summary><strong>Диагностика</strong></summary>
       <div class="progress" id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progressBar"></div></div>
       <ul id="logs"></ul>
-      <section id="errorCard" class="hidden">
-        <h3 id="errorTitle">Ошибка</h3>
-        <p id="errorMessage"></p>
-        <pre id="errorDetails" class="pre"></pre>
-        <button id="retryBtn" type="button">Повторить</button>
-      </section>
-    </div>
-  </section>
+    </details>
+  </main>
 
   <aside id="historyDrawer" class="drawer hidden">
     <div class="row"><strong>История</strong><button id="clearHistoryBtn" type="button">Очистить</button></div>
@@ -146,15 +94,15 @@
   <dialog id="helpDialog">
     <h3>Как пользоваться</h3>
     <ol>
-      <li>Загрузите PDF и нажмите «Проверить заявление».</li>
-      <li>Сначала смотрите вердикт в баннере.</li>
-      <li>Во вкладке «Ошибки» кликните на пункт и исправьте в инспекторе.</li>
-      <li>В «Текст заявления» скопируйте готовый вариант.</li>
+      <li>Загрузите PDF и нажмите «Проверить файл».</li>
+      <li>Смотрите понятный статус проверки.</li>
+      <li>Исправьте ошибки по подсказкам из списка.</li>
+      <li>Сразу скачайте результат.</li>
     </ol>
     <button id="closeHelpBtn" type="button">Закрыть</button>
   </dialog>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script type="module" src="/static/app.js?v=4"></script>
+  <script type="module" src="/static/app.js?v=5"></script>
 </body>
 </html>
