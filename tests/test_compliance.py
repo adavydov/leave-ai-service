@@ -44,7 +44,8 @@ def test_days_count_mismatch_error():
     issues, _ = run_compliance_checks(ex)
     codes = _codes(issues)
     assert "days_count_mismatch" in codes
-    assert codes["days_count_mismatch"].details == {
+    assert codes["days_count_mismatch"].details is not None
+    assert codes["days_count_mismatch"].details.model_dump() == {
         "rule_id": "days_count_mismatch",
         "law_ref": None,
         "expected": 7,

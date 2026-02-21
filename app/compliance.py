@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Optional
+from typing import Optional
 
-from .schemas import ComplianceIssue, LeaveRequestExtract
+from .schemas import ComplianceIssue, ComplianceIssueDetails, LeaveRequestExtract
 
 
 COMPLIANCE_RULES_VERSION = "1.1"
@@ -30,15 +30,15 @@ def run_compliance_checks(extract: LeaveRequestExtract) -> tuple[list[Compliance
         law_ref: Optional[str] = None,
         expected: Optional[str | int | float] = None,
         actual: Optional[str | int | float] = None,
-    ) -> dict[str, Optional[str | int | float]]:
-        return {
-            "rule_id": rule_id,
-            "law_ref": law_ref,
-            "expected": expected,
-            "actual": actual,
-        }
+    ) -> ComplianceIssueDetails:
+        return ComplianceIssueDetails(
+            rule_id=rule_id,
+            law_ref=law_ref,
+            expected=expected,
+            actual=actual,
+        )
 
-    def add(level: str, code: str, message: str, field: Optional[str] = None, details: Optional[dict[str, Any]] = None) -> None:
+    def add(level: str, code: str, message: str, field: Optional[str] = None, details: Optional[ComplianceIssueDetails] = None) -> None:
         issues.append(ComplianceIssue(level=level, code=code, field=field, message=message, details=details))
 
     try:

@@ -101,12 +101,21 @@ class ValidationIssue(BaseModel):
     message: str
 
 
+
+
+class ComplianceIssueDetails(BaseModel):
+    rule_id: Optional[str] = None
+    law_ref: Optional[str] = None
+    expected: Optional[str | int | float] = None
+    actual: Optional[str | int | float] = None
+
+
 class ComplianceIssue(BaseModel):
     level: Literal["error", "warn", "info"] = "info"
     code: str
     field: Optional[str] = None
     message: str
-    details: Optional[dict[str, Optional[str | int | float]]] = None
+    details: Optional[ComplianceIssueDetails] = None
 
 
 class ApiResponse(BaseModel):
