@@ -94,8 +94,39 @@ async def api_extract(file: UploadFile = File(...)):
         raise HTTPException(status_code=502, detail="AI-сервис временно недоступен. Повторите попытку позже.")
     except Exception as e:
         if str(e).strip().lower() == "internal server error":
+    except Exception as e:
+        if _looks_like_upstream_ai_error(e):
             raise HTTPException(status_code=502, detail="AI-сервис временно недоступен. Повторите попытку позже.")
         raise HTTPException(status_code=500, detail=_sanitize_error_message(e))
+
+
+def _iter_exception_chain(err: Exception):
+    seen = set()
+    cur = err
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        yield cur
+        cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+
+
+def _looks_like_upstream_ai_error(err: Exception) -> bool:
+    markers = (
+        "anthropic",
+        "internal server error",
+        "api_error",
+        "bad gateway",
+        "gateway",
+        "overloaded",
+        "rate limit",
+        "upstream",
+    )
+    for exc in _iter_exception_chain(err):
+        if isinstance(exc, (UpstreamAIError, anthropic.APIError)):
+            return True
+        text = str(exc or "").lower()
+        if any(marker in text for marker in markers):
+            return True
+    return False
 
 
 def _sanitize_error_message(err: Exception) -> str:
