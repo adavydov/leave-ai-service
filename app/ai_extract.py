@@ -59,13 +59,22 @@ def _safe_anthropic_error_message(err: Exception) -> str:
     return "Не удалось обработать документ во внешнем AI-сервисе."
 
 
+def _resolve_vision_fallback_model(primary_model: str, configured_fallback_model: Optional[str]) -> Optional[str]:
+    configured = (configured_fallback_model or "").strip()
+    primary = (primary_model or "").strip()
+
+    if configured and configured != primary:
+        return configured
+
+    if "opus" in primary.lower():
+        return "claude-sonnet-4-6"
+
+    return None
+
+
 def _should_try_vision_fallback(err: Exception, primary_model: str, fallback_model: Optional[str]) -> bool:
-    fallback = (fallback_model or "").strip()
-    if not fallback:
-        return False
-    if fallback == (primary_model or "").strip():
-        return False
-    return _is_overloaded_error(err)
+    fallback = _resolve_vision_fallback_model(primary_model, fallback_model)
+    return bool(fallback) and _is_overloaded_error(err)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -497,7 +506,8 @@ def extract_leave_request_with_debug(
 
     vision_model = model or os.getenv("ANTHROPIC_VISION_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     structured_model = os.getenv("ANTHROPIC_STRUCTURED_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-    vision_fallback_model = os.getenv("ANTHROPIC_VISION_FALLBACK_MODEL")
+    configured_vision_fallback_model = os.getenv("ANTHROPIC_VISION_FALLBACK_MODEL")
+    vision_fallback_model = _resolve_vision_fallback_model(vision_model, configured_vision_fallback_model)
     max_retries = _env_int("ANTHROPIC_MAX_RETRIES", 0)
     anthropic_http_timeout_s = _env_int_min("ANTHROPIC_HTTP_TIMEOUT_S", 60, 10)
     draft_max_tokens = _env_int_min("ANTHROPIC_DRAFT_MAX_TOKENS", 1024, 256)
@@ -524,7 +534,7 @@ def extract_leave_request_with_debug(
         f"Конфиг AI: vision_model={vision_model}, structured_model={structured_model}, retries={max_retries}, "
         f"sdk_http_timeout_s={effective_http_timeout_s}, vision_timeout_s={vision_timeout_s}, "
         f"structured_parse_timeout_s={structured_parse_timeout_s}, structured_fallback_timeout_s={structured_fallback_timeout_s}, "
-        f"structured_draft_max_chars={structured_draft_max_chars}, vision_fallback_model={vision_fallback_model or '-'}",
+        f"structured_draft_max_chars={structured_draft_max_chars}, vision_fallback_model={vision_fallback_model or '-'}, configured_vision_fallback_model={configured_vision_fallback_model or '-'}",
         on_debug,
     )
 
@@ -568,7 +578,12 @@ def extract_leave_request_with_debug(
         if rid:
             _add_debug(debug_steps, f"Шаг vision: error_request_id={rid}", on_debug)
         if _should_try_vision_fallback(e, vision_model, vision_fallback_model):
-            _add_debug(debug_steps, f"Шаг vision: overloaded; пробуем fallback model={vision_fallback_model}", on_debug)
+            _add_debug(
+                debug_steps,
+                f"Шаг vision: overloaded; пробуем fallback model={vision_fallback_model} "
+                f"(configured={configured_vision_fallback_model or '-'}, primary={vision_model})",
+                on_debug,
+            )
             try:
                 draft_msg = _run_with_timeout(lambda: _vision_call(str(vision_fallback_model)), vision_timeout_s, "vision.fallback")
                 draft_text = _extract_text_from_msg(draft_msg)

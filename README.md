@@ -24,7 +24,7 @@ uvicorn app.main:app --reload
 - `ANTHROPIC_API_KEY` — ключ API Anthropic
 - `ANTHROPIC_MODEL` — модель по умолчанию (например `claude-sonnet-4-6`)
 - `ANTHROPIC_VISION_MODEL` — отдельная модель для OCR/vision шага (опционально)
-- `ANTHROPIC_VISION_FALLBACK_MODEL` — fallback-модель для vision при `OverloadedError` (например, `claude-sonnet-4-6`)
+- `ANTHROPIC_VISION_FALLBACK_MODEL` — fallback-модель для vision при `OverloadedError` (например, `claude-sonnet-4-6`). Если не задана и основная vision-модель содержит `opus`, сервис автоматически попробует `claude-sonnet-4-6`.
 - `ANTHROPIC_STRUCTURED_MODEL` — отдельная модель для structured шага (опционально)
 - `MOCK_MODE=1` — выключает внешние вызовы и возвращает мок-ответ
 - `MAX_UPLOAD_MB` — лимит размера PDF (по умолчанию 15)
