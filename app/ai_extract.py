@@ -65,6 +65,11 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_int_min(name: str, default: int, minimum: int) -> int:
+    value = _env_int(name, default)
+    return max(value, minimum)
+
+
 def _env_str(name: str, default: str) -> str:
     v = os.getenv(name)
     return default if v is None or v.strip() == "" else v.strip()
@@ -476,11 +481,12 @@ def extract_leave_request_with_debug(
     try:
         image_blocks, render_info = _render_pdf_to_image_blocks(pdf_bytes, debug_steps, on_debug=on_debug)
     except Exception as e:
-        _add_debug(debug_steps, f"Шаг PDF->PNG: ошибка: {type(e).__name__}", on_debug)
+        render_reason = _short_error(e)
+        _add_debug(debug_steps, f"Шаг PDF->PNG: ошибка: {type(e).__name__}: {render_reason}", on_debug)
         raise UpstreamAIError(
             step="render",
             status_code=422,
-            message="Не удалось обработать PDF перед отправкой в AI.",
+            message=f"Не удалось обработать PDF перед отправкой в AI: {render_reason}",
             debug_steps=debug_steps,
         ) from e
 
