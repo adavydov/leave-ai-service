@@ -257,9 +257,10 @@ function bindEvents() {
   });
 
   byId('extractFormWrap').addEventListener('input', (e) => {
-    const path = e.target.getAttribute('data-edit');
+    const target = e.target;
+    const path = target?.getAttribute?.('data-edit');
     if (!path) return;
-    applyEdit(path, e.target.value);
+    applyEdit(path, target.value);
     render(state);
   });
 
