@@ -39,12 +39,14 @@ def test_invalid_date_range_error():
     assert needs_rewrite is True
 
 
-def test_days_count_mismatch_error():
+def test_days_count_mismatch_error_with_explainable_fields():
     ex = _base_extract(leave={"leave_type": "annual_paid", "start_date": "2026-02-10", "end_date": "2026-02-16", "days_count": 8})
     issues, _ = run_compliance_checks(ex)
     codes = _codes(issues)
     assert "days_count_mismatch" in codes
     assert codes["days_count_mismatch"].details == {"expected": 7, "actual": 8}
+    assert codes["days_count_mismatch"].rule_id == "COUNT-002"
+    assert "дней" in (codes["days_count_mismatch"].action_hint or "")
 
 
 def test_annual_paid_part_lt14_warn_not_error():
@@ -53,6 +55,7 @@ def test_annual_paid_part_lt14_warn_not_error():
     codes = _codes(issues)
     assert "annual_paid_part_lt14" in codes
     assert codes["annual_paid_part_lt14"].level == "warn"
+    assert codes["annual_paid_part_lt14"].rule_id == "LAW-122-001"
 
 
 def test_missing_signature_error():
@@ -62,3 +65,14 @@ def test_missing_signature_error():
     assert "missing_signature" in codes
     assert codes["missing_signature"].level == "error"
     assert needs_rewrite is True
+
+
+def test_unpaid_without_reason_info():
+    ex = _base_extract(
+        leave={"leave_type": "unpaid", "start_date": "2026-02-10", "end_date": "2026-02-12", "days_count": 3, "comment": None},
+        raw_text="Прошу предоставить отпуск без сохранения",
+    )
+    issues, _ = run_compliance_checks(ex)
+    codes = _codes(issues)
+    assert "unpaid_no_reason" in codes
+    assert codes["unpaid_no_reason"].level == "info"
