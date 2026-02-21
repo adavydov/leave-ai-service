@@ -4,8 +4,9 @@ import base64
 import json
 import logging
 import os
+import queue
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import anthropic
@@ -139,10 +140,6 @@ def _parse_prompt_ru_json_only(draft_text: str) -> str:
     )
 
 
-
-
-
-
 def _short_error(err: Exception) -> str:
     text = re.sub(r"\s+", " ", str(err or "")).strip()
     return text[:220] if text else type(err).__name__
@@ -152,15 +149,46 @@ def _trim_draft_text(draft_text: str, max_chars: int, debug_steps: List[str], on
     cleaned = (draft_text or "").replace("\x00", "").strip()
     if len(cleaned) <= max_chars:
         return cleaned
-    _add_debug(debug_steps, f"Шаг structured.parse: draft_text обрезан с {len(cleaned)} до {max_chars} символов", on_debug)
-    return cleaned[:max_chars]
+
+    head = max_chars * 2 // 3
+    tail = max_chars - head
+    trimmed = cleaned[:head] + "\n... [TRIMMED] ...\n" + cleaned[-tail:]
+    _add_debug(
+        debug_steps,
+        f"Шаг structured.parse: draft_text обрезан (orig={len(cleaned)}, limit={max_chars}, head={head}, tail={tail})",
+        on_debug,
+    )
+    return trimmed
+
+
 def _run_with_timeout(fn: Callable[[], Any], timeout_s: int, label: str):
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn)
+    timeout_s = max(1, int(timeout_s))
+    result_q: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def _runner() -> None:
         try:
-            return future.result(timeout=max(1, int(timeout_s)))
-        except FuturesTimeoutError as e:
-            raise TimeoutError(f"{label} timed out after {timeout_s}s") from e
+            result_q.put((True, fn()))
+        except Exception as err:  # noqa: BLE001
+            result_q.put((False, err))
+
+    t = threading.Thread(target=_runner, daemon=True, name=f"timeout-{label}")
+    t.start()
+
+    try:
+        ok, payload = result_q.get(timeout=timeout_s)
+    except queue.Empty as e:
+        raise TimeoutError(f"{label} timed out after {timeout_s}s") from e
+
+    if ok:
+        return payload
+    raise payload
+
+
+def _create_anthropic_client(api_key: str, max_retries: int, http_timeout_s: int) -> Anthropic:
+    try:
+        return Anthropic(api_key=api_key, max_retries=max_retries, timeout=max(5, int(http_timeout_s)))
+    except TypeError:
+        return Anthropic(api_key=api_key, max_retries=max_retries)
 
 
 def _raise_timeout(step: str, err: TimeoutError, debug_steps: List[str]):
@@ -170,6 +198,7 @@ def _raise_timeout(step: str, err: TimeoutError, debug_steps: List[str]):
         message="AI-сервис не ответил вовремя. Повторите попытку позже или уменьшите размер PDF.",
         debug_steps=debug_steps,
     ) from err
+
 
 def _render_pdf_to_image_blocks(
     pdf_bytes: bytes,
@@ -210,12 +239,7 @@ def _render_pdf_to_image_blocks(
             png_bytes = _pix_to_png_bytes(pix)
             b64 = base64.b64encode(png_bytes).decode("ascii")
 
-            blocks.append(
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": b64},
-                }
-            )
+            blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}})
             page_stats.append({"page": i, "w_px": pix.width, "h_px": pix.height, "png_bytes": len(png_bytes), "b64_chars": len(b64)})
 
         approx_b64_bytes = sum(p["b64_chars"] for p in page_stats)
@@ -297,6 +321,7 @@ def extract_leave_request_with_debug(
     vision_model = model or os.getenv("ANTHROPIC_VISION_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     structured_model = os.getenv("ANTHROPIC_STRUCTURED_MODEL") or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     max_retries = _env_int("ANTHROPIC_MAX_RETRIES", 0)
+    anthropic_http_timeout_s = _env_int_min("ANTHROPIC_HTTP_TIMEOUT_S", 60, 10)
     draft_max_tokens = _env_int_min("ANTHROPIC_DRAFT_MAX_TOKENS", 1024, 256)
     out_max_tokens = _env_int_min("ANTHROPIC_MAX_TOKENS", 1024, 512)
     vision_timeout_s = _env_int_min("ANTHROPIC_VISION_TIMEOUT_S", 90, 15)
@@ -304,13 +329,14 @@ def extract_leave_request_with_debug(
     structured_fallback_timeout_s = _env_int_min("ANTHROPIC_STRUCTURED_FALLBACK_TIMEOUT_S", 90, 15)
     structured_draft_max_chars = _env_int_min("ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS", 12000, 2000)
 
-    client = Anthropic(api_key=api_key, max_retries=max_retries)
+    client = _create_anthropic_client(api_key=api_key, max_retries=max_retries, http_timeout_s=anthropic_http_timeout_s)
 
     _add_debug(
         debug_steps,
         f"Конфиг AI: vision_model={vision_model}, structured_model={structured_model}, retries={max_retries}, "
-        f"vision_timeout_s={vision_timeout_s}, structured_parse_timeout_s={structured_parse_timeout_s}, "
-        f"structured_fallback_timeout_s={structured_fallback_timeout_s}, structured_draft_max_chars={structured_draft_max_chars}",
+        f"sdk_http_timeout_s={anthropic_http_timeout_s}, vision_timeout_s={vision_timeout_s}, "
+        f"structured_parse_timeout_s={structured_parse_timeout_s}, structured_fallback_timeout_s={structured_fallback_timeout_s}, "
+        f"structured_draft_max_chars={structured_draft_max_chars}",
         on_debug,
     )
 

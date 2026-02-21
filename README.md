@@ -51,3 +51,5 @@ gunicorn app.main:app -c gunicorn_conf.py
 
 - `ANTHROPIC_MAX_RETRIES` — количество SDK-ретраев. Рекомендуется `0` для прозрачной диагностики structured-ошибок.
 - `ANTHROPIC_STRUCTURED_DRAFT_MAX_CHARS` — ограничение размера draft_text перед structured-шагом (по умолчанию 12000).
+
+- `ANTHROPIC_HTTP_TIMEOUT_S` — явный HTTP timeout для Anthropic SDK (по умолчанию 60).

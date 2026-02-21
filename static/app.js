@@ -6,6 +6,29 @@ function appendLine(line) {
   outEl.textContent += (outEl.textContent ? '\n' : '') + line;
 }
 
+function handleNdjsonLine(line, state) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+
+  let evt;
+  try {
+    evt = JSON.parse(trimmed);
+  } catch {
+    appendLine('[stream] некорректная строка: ' + trimmed.slice(0, 160));
+    return;
+  }
+
+  if (evt.type === 'step') {
+    appendLine('• ' + evt.message);
+  } else if (evt.type === 'result') {
+    state.finalPayload = evt.payload;
+    appendLine(evt.ok ? '✅ Завершено успешно' : `❌ Ошибка (${evt.status})`);
+  } else if (evt.detail) {
+    state.finalPayload = evt;
+    appendLine('❌ Ошибка (' + (evt.status || 'unknown') + ')');
+  }
+}
+
 btn.addEventListener('click', async () => {
   const f = fileEl.files && fileEl.files[0];
   if (!f) {
@@ -23,47 +46,37 @@ btn.addEventListener('click', async () => {
 
   try {
     const res = await fetch('/api/extract/stream', { method: 'POST', body: fd, signal: controller.signal });
+
     if (!res.body) {
-      throw new Error('Пустой поток ответа от сервера');
+      const txt = await res.text();
+      throw new Error(txt || 'Пустой ответ от сервера');
     }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
-    let finalPayload = null;
+    const state = { finalPayload: null };
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        let evt;
-        try {
-          evt = JSON.parse(trimmed);
-        } catch {
-          appendLine('[stream] некорректная строка: ' + trimmed.slice(0, 160));
-          continue;
-        }
-
-        if (evt.type === 'step') {
-          appendLine('• ' + evt.message);
-        } else if (evt.type === 'result') {
-          finalPayload = evt.payload;
-          appendLine(evt.ok ? '✅ Завершено успешно' : `❌ Ошибка (${evt.status})`);
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          handleNdjsonLine(line, state);
         }
       }
+      if (done) break;
     }
 
-    if (finalPayload) {
+    if (buffer.trim()) {
+      handleNdjsonLine(buffer, state);
+    }
+
+    if (state.finalPayload) {
       appendLine('');
-      appendLine(JSON.stringify(finalPayload, null, 2));
+      appendLine(JSON.stringify(state.finalPayload, null, 2));
     } else {
       appendLine('❌ Не получен финальный результат от сервера.');
     }
