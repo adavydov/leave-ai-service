@@ -24,8 +24,28 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr review --approve "$PR_URL" || true
 
-      - name: Enable auto-merge (squash)
+      - name: Enable auto-merge (squash) with safe fallback
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          set +e
+          OUTPUT=$(gh pr merge --auto --squash "$PR_URL" 2>&1)
+          STATUS=$?
+          set -e
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "$OUTPUT"
+            echo "Auto-merge enabled."
+            exit 0
+          fi
+
+          echo "$OUTPUT"
+
+          if echo "$OUTPUT" | grep -q "enablePullRequestAutoMerge"; then
+            echo "Auto-merge is not enabled for this protected branch; skipping without failing workflow."
+            exit 0
+          fi
+
+          echo "Failed to enable auto-merge for an unexpected reason."
+          exit "$STATUS"
