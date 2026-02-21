@@ -1,25 +1,8 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Any
 
-
-
-
-IssueSeverity = Literal["error", "warn", "info"]
-IssueDomain = Literal["extraction", "compliance", "system", "upstream"]
-IssueCategory = Literal[
-    "document",
-    "dates",
-    "counts",
-    "signature",
-    "law_hints",
-    "quality",
-    "timeouts",
-    "network",
-    "validation",
-    "unknown",
-]
 
 LeaveType = Literal[
     "annual_paid",   # ежегодный оплачиваемый
@@ -118,36 +101,43 @@ class ValidationIssue(BaseModel):
     message: str
 
 
+class ComplianceDetails(BaseModel):
+    rule_id: Optional[str] = None
+    law_ref: Optional[str] = None
+    expected: Optional[Any] = None
+    actual: Optional[Any] = None
+
+
 class ComplianceIssue(BaseModel):
     level: Literal["error", "warn", "info"] = "info"
     code: str
     field: Optional[str] = None
     message: str
-    details: Optional[dict] = None
+    details: Optional[ComplianceDetails] = None
 
 
 class Issue(BaseModel):
-    severity: IssueSeverity = "info"
-    domain: IssueDomain = "system"
-    category: IssueCategory = "unknown"
+    severity: Literal["error", "warn", "info"]
+    domain: Literal["extraction", "compliance", "upstream", "system"]
+    category: str
     code: str
-    field: Optional[str] = None
     message: str
-    hint: Optional[str] = None
-    details: Optional[dict] = None
+    field: Optional[str] = None
     source: Optional[str] = None
+    hint: Optional[str] = None
+    details: Optional[Any] = None
 
 
 class Decision(BaseModel):
-    status: Literal["ok", "warn", "error"] = "ok"
-    needs_rewrite: bool = False
-    summary: str = "Замечаний не обнаружено."
+    status: Literal["ok", "warn", "error"]
+    needs_rewrite: bool
+    summary: str
 
 
 class Trace(BaseModel):
     request_id: str
-    upstream_request_ids: dict[str, str] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
+    upstream_request_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class ApiResponse(BaseModel):
@@ -155,6 +145,4 @@ class ApiResponse(BaseModel):
     validation: List[ValidationIssue]
     compliance: List[ComplianceIssue] = Field(default_factory=list)
     needs_rewrite: bool = False
-    issues: List[Issue] = Field(default_factory=list)
-    decision: Decision = Field(default_factory=Decision)
-    trace: Optional[Trace] = None
+    compliance_rules_version: Optional[str] = None

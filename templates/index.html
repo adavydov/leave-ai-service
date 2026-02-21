@@ -18,7 +18,6 @@
     .status { display: inline-block; padding: 4px 10px; border-radius: 999px; font-weight: 700; }
     .ok { background: #d9f7e8; color: #0f6b3d; }
     .bad { background: #fde2e2; color: #8f1f1f; }
-    .warn { background: #fff3d8; color: #8a5b00; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #d8d8d8; vertical-align: top; }
     ul, ol { margin: 8px 0 0 20px; padding: 0; }
@@ -48,11 +47,6 @@
     <button id="download" hidden>Скачать JSON</button>
     <span id="status" class="status muted">Ожидание</span>
   </div>
-
-  <section class="card">
-    <h3>Статус</h3>
-    <div class="small">Trace: <span id="trace">—</span> <button id="copyRequestId" type="button">Копировать request_id</button></div>
-  </section>
 
   <section class="card">
     <h3>Отладочные шаги</h3>
@@ -85,23 +79,13 @@
     <div id="complianceSummary" class="small muted">Ожидание результата…</div>
     <table id="complianceTable">
       <thead>
-        <tr><th>Уровень</th><th>Сообщение</th><th>Поле</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </section>
-
-  <section class="card">
-    <h3>Проблемы</h3>
-    <table id="issuesTable">
-      <thead>
-        <tr><th>Severity</th><th>Описание</th><th>Поле</th><th>Код</th></tr>
+        <tr><th>Уровень</th><th>Сообщение</th><th>Поле</th><th>Норма</th><th>Детали</th></tr>
       </thead>
       <tbody></tbody>
     </table>
   </section>
 
   <script>window.outEl = document.getElementById('out') || window.outEl;</script>
-  <script src="/static/app.js?v=20260221-5"></script>
+  <script src="/static/app.js?v=20260221-4"></script>
 </body>
 </html>

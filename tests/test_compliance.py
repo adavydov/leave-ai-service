@@ -44,7 +44,9 @@ def test_days_count_mismatch_error():
     issues, _ = run_compliance_checks(ex)
     codes = _codes(issues)
     assert "days_count_mismatch" in codes
-    assert codes["days_count_mismatch"].details == {"expected": 7, "actual": 8}
+    assert codes["days_count_mismatch"].details.expected == 7
+    assert codes["days_count_mismatch"].details.actual == 8
+    assert codes["days_count_mismatch"].details.rule_id == "days_count_mismatch"
 
 
 def test_annual_paid_part_lt14_warn_not_error():

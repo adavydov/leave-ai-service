@@ -7,7 +7,6 @@ import os
 import queue
 import re
 import threading
-import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import anthropic
@@ -29,15 +28,9 @@ class UpstreamAIError(RuntimeError):
 logger = logging.getLogger(__name__)
 
 
-def _safe_log_debug_message(message: str) -> str:
-    msg = re.sub(r"name=[^,]+", "name=<masked>", message)
-    msg = re.sub(r'full_name[\'"]?:\s*[^,}]+', "full_name:<masked>", msg, flags=re.IGNORECASE)
-    return msg
-
-
 def _add_debug(debug_steps: List[str], message: str, on_debug: Optional[Callable[[str], None]] = None) -> None:
     debug_steps.append(message)
-    logger.info("[extract] %s", _safe_log_debug_message(message))
+    logger.info("[extract] %s", message)
     if on_debug:
         on_debug(message)
 
@@ -66,8 +59,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _env_int_min(name: str, default: int, minimum: int) -> int:
-    value = _env_int(name, default)
-    return max(value, minimum)
+    return max(minimum, _env_int(name, default))
 
 
 def _env_str(name: str, default: str) -> str:
@@ -75,17 +67,26 @@ def _env_str(name: str, default: str) -> str:
     return default if v is None or v.strip() == "" else v.strip()
 
 
-def _max_image_b64_chars_limit(default: int = 4_000_000) -> int:
-    """Return base64 payload limit with backward-compatible env alias support."""
+def _max_image_b64_chars_limit() -> int:
+    """Backward-compatible env helper: prefer MAX_IMAGE_B64_CHARS, fallback to PDF_MAX_B64_BYTES."""
     canonical = os.getenv("MAX_IMAGE_B64_CHARS")
+    if canonical is not None and canonical.strip():
+        try:
+            return int(canonical)
+        except ValueError:
+            return 4_000_000
+
     legacy = os.getenv("PDF_MAX_B64_BYTES")
-    raw = canonical if canonical not in (None, "") else legacy
-    if raw in (None, ""):
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
+    if legacy is not None and legacy.strip():
+        try:
+            return int(legacy)
+        except ValueError:
+            return 4_000_000
+    return 4_000_000
+
+
+def _env_int_min(name: str, default: int, minimum: int) -> int:
+    return max(minimum, _env_int(name, default))
 
 
 def _pix_to_png_bytes(pix) -> bytes:
@@ -252,6 +253,35 @@ def _normalize_fallback_payload(raw_json: Dict[str, Any], debug_steps: List[str]
                     on_debug,
                 )
             payload["signature_confidence"] = clipped_sc
+
+    quality = payload.get("quality")
+    if isinstance(quality, dict):
+        for key in ("notes", "missing_fields"):
+            value = quality.get(key)
+            if isinstance(value, str):
+                normalized_value = [value.strip()] if value.strip() else []
+                quality[key] = normalized_value
+                _add_debug(
+                    debug_steps,
+                    f"Шаг structured.fallback.normalize: quality.{key} string -> list[{len(normalized_value)}]",
+                    on_debug,
+                )
+            elif isinstance(value, list):
+                normalized_value = []
+                for item in value:
+                    if item is None:
+                        continue
+                    text = str(item).strip()
+                    if text:
+                        normalized_value.append(text)
+                if normalized_value != value:
+                    quality[key] = normalized_value
+                    _add_debug(
+                        debug_steps,
+                        f"Шаг structured.fallback.normalize: quality.{key} list sanitized ({len(value)} -> {len(normalized_value)})",
+                        on_debug,
+                    )
+
     return payload
 
 
@@ -371,20 +401,20 @@ def _render_pdf_to_image_blocks(
             page_stats.append({"page": i, "w_px": pix.width, "h_px": pix.height, "png_bytes": len(png_bytes), "b64_chars": len(b64)})
 
         approx_b64_chars = sum(p["b64_chars"] for p in page_stats)
-        if approx_b64_chars > max_b64_chars:
-            raise RuntimeError(f"Rendered images too large for request: approx_b64_chars={approx_b64_chars} > {max_b64_chars}.")
+        if approx_b64_chars > max_b64_bytes:
+            raise RuntimeError(f"Rendered images too large for request: approx_b64_chars={approx_b64_chars} > {max_b64_bytes}.")
 
         info = {
             "total_pages": total_pages,
             "pages_sent": pages_to_send,
             "target_long_edge": target_long_edge,
             "color_mode": color_mode,
-            "approx_b64_chars": approx_b64_chars,
+            "approx_b64_bytes": approx_b64_chars,
             "page_stats": page_stats,
         }
         _add_debug(
             debug_steps,
-            f"PDF->PNG ок: pages_sent={pages_to_send}, approx_b64_chars={approx_b64_chars}, page0={page_stats[0] if page_stats else None}",
+            f"PDF->PNG ок: pages_sent={pages_to_send}, approx_b64_bytes={approx_b64_chars}, page0={page_stats[0] if page_stats else None}",
             on_debug,
         )
         return blocks, info
@@ -481,12 +511,11 @@ def extract_leave_request_with_debug(
     try:
         image_blocks, render_info = _render_pdf_to_image_blocks(pdf_bytes, debug_steps, on_debug=on_debug)
     except Exception as e:
-        render_reason = _short_error(e)
-        _add_debug(debug_steps, f"Шаг PDF->PNG: ошибка: {type(e).__name__}: {render_reason}", on_debug)
+        _add_debug(debug_steps, f"Шаг PDF->PNG: ошибка: {type(e).__name__}", on_debug)
         raise UpstreamAIError(
             step="render",
             status_code=422,
-            message=f"Не удалось обработать PDF перед отправкой в AI: {render_reason}",
+            message="Не удалось обработать PDF перед отправкой в AI.",
             debug_steps=debug_steps,
         ) from e
 
@@ -598,7 +627,7 @@ def extract_leave_request_with_debug(
     try:
         parsed.quality.notes.append(
             f"render: pages_sent={render_info['pages_sent']}/{render_info['total_pages']}, "
-            f"target_long_edge={render_info['target_long_edge']}, approx_b64_chars={render_info['approx_b64_chars']}, "
+            f"target_long_edge={render_info['target_long_edge']}, approx_b64_bytes={render_info['approx_b64_bytes']}, "
             f"color_mode={render_info['color_mode']}"
         )
     except Exception:
@@ -616,25 +645,3 @@ def extract_leave_request_from_pdf_bytes(
 ) -> LeaveRequestExtract:
     parsed, _ = extract_leave_request_with_debug(pdf_bytes, filename, model=model)
     return parsed
-
-
-def _trace_from_debug(debug_steps: List[str], total_ms: int) -> dict[str, Any]:
-    upstream_request_ids: dict[str, str] = {}
-    for line in debug_steps:
-        m = re.search(r"Шаг ([^:]+): request_id=([A-Za-z0-9_\-]+)", line)
-        if m:
-            upstream_request_ids[m.group(1)] = m.group(2)
-    timings_ms = {"total_ms": int(total_ms)}
-    return {"upstream_request_ids": upstream_request_ids, "timings_ms": timings_ms}
-
-
-def extract_leave_request_with_meta(
-    pdf_bytes: bytes,
-    filename: str,
-    model: Optional[str] = None,
-    on_debug: Optional[Callable[[str], None]] = None,
-) -> tuple[LeaveRequestExtract, List[str], dict[str, Any]]:
-    started = time.perf_counter()
-    parsed, debug_steps = extract_leave_request_with_debug(pdf_bytes, filename, model=model, on_debug=on_debug)
-    total_ms = int((time.perf_counter() - started) * 1000)
-    return parsed, debug_steps, _trace_from_debug(debug_steps, total_ms)
