@@ -109,6 +109,34 @@ class ComplianceIssue(BaseModel):
     details: Optional[dict] = None
 
 
+IssueSeverity = Literal["error", "warn", "info"]
+IssueDomain = Literal["extraction", "compliance", "upstream", "system"]
+
+
+class Issue(BaseModel):
+    severity: IssueSeverity
+    domain: IssueDomain
+    category: str
+    code: str
+    message: str
+    field: Optional[str] = None
+    source: Optional[str] = None
+    hint: Optional[str] = None
+    details: Optional[dict] = None
+
+
+class Decision(BaseModel):
+    status: Literal["ok", "warn", "error"]
+    needs_rewrite: bool
+    summary: str
+
+
+class Trace(BaseModel):
+    request_id: str
+    timings_ms: dict[str, int] = Field(default_factory=dict)
+    upstream_request_ids: dict[str, str] = Field(default_factory=dict)
+
+
 class ApiResponse(BaseModel):
     extract: LeaveRequestExtract
     validation: List[ValidationIssue]

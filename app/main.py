@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from .ai_extract import UpstreamAIError, extract_leave_request_with_debug
 from .compliance import run_compliance_checks
+from .issues import build_decision, build_trace, make_upstream_issue
 from .schemas import ApiResponse
 from .validation import validate_extract
 
@@ -107,6 +108,82 @@ def _sanitize_error_message(err: Exception) -> str:
     return message[:320]
 
 
+
+
+def _upstream_error_to_issue_and_status(err: Exception, source: str) -> tuple[int, Any]:
+    status_code = int(getattr(err, "status_code", 0) or 0)
+    message = str(err or "").strip()
+    low = message.lower()
+
+    if "timeout" in low:
+        return 504, make_upstream_issue(
+            code="anthropic_timeout",
+            message="AI-сервис не ответил вовремя. Повторите попытку.",
+            source=source,
+            category="network",
+            severity="error",
+            hint="Попробуйте снова или уменьшите размер PDF.",
+        )
+
+    if status_code == 429 or "rate" in low or "too many requests" in low:
+        return 503, make_upstream_issue(
+            code="anthropic_rate_limited",
+            message="AI-сервис временно перегружен (rate limit). Повторите позже.",
+            source=source,
+            category="network",
+            severity="error",
+            hint="Подождите 30–60 секунд и повторите запрос.",
+        )
+
+    if status_code >= 500 or "internal server error" in low or "bad gateway" in low:
+        return 502, make_upstream_issue(
+            code="anthropic_unavailable",
+            message="AI-сервис временно недоступен.",
+            source=source,
+            category="network",
+            severity="error",
+        )
+
+    return 502, make_upstream_issue(
+        code="anthropic_error",
+        message=message or "Не удалось обработать документ во внешнем AI-сервисе.",
+        source=source,
+        category="network",
+        severity="error",
+    )
+
+
+
+def _http_error_to_issue_and_status(err: HTTPException) -> tuple[int, Any]:
+    status = int(getattr(err, "status_code", 500) or 500)
+    detail = str(getattr(err, "detail", "") or "")
+
+    if status == 400:
+        return status, make_upstream_issue(
+            code="pdf_invalid_type",
+            message=detail or "Пожалуйста, загрузите PDF файл.",
+            source="upload",
+            category="document",
+            severity="error",
+        )
+
+    if status == 413:
+        return status, make_upstream_issue(
+            code="pdf_too_large",
+            message=detail or "Файл слишком большой.",
+            source="upload",
+            category="document",
+            severity="error",
+        )
+
+    return status, make_upstream_issue(
+        code="upload_error",
+        message=detail or "Ошибка загрузки файла.",
+        source="upload",
+        category="document",
+        severity="error",
+    )
+
 def _build_error_payload(err: Exception, where: str) -> tuple[int, dict[str, Any]]:
     if isinstance(err, UpstreamAIError):
         logger.exception("UpstreamAIError in %s (step=%s, status=%s)", where, getattr(err, "step", "unknown"), err.status_code)
@@ -139,8 +216,8 @@ def _build_error_payload(err: Exception, where: str) -> tuple[int, dict[str, Any
 
 @app.post("/api/extract")
 async def api_extract(file: UploadFile = File(...)):
-    filename, data = await _read_pdf_upload(file)
     try:
+        filename, data = await _read_pdf_upload(file)
         extract, debug_steps = await run_in_threadpool(extract_leave_request_with_debug, data, filename)
         validation = validate_extract(extract)
         compliance, needs_rewrite = run_compliance_checks(extract)
@@ -152,6 +229,17 @@ async def api_extract(file: UploadFile = File(...)):
         ).model_dump()
         resp["debug_steps"] = debug_steps
         return resp
+    except HTTPException as e:
+        status, issue = _http_error_to_issue_and_status(e)
+        issues = [issue]
+        return JSONResponse(
+            status_code=status,
+            content={
+                "issues": [item.model_dump() for item in issues],
+                "decision": build_decision(issues).model_dump(),
+                "trace": build_trace("upload", {}, {}).model_dump(),
+            },
+        )
     except Exception as e:
         status, payload = _build_error_payload(e, "api_extract")
         return JSONResponse(status_code=status, content=payload)
